@@ -2273,7 +2273,8 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_metadata_retries_transient_cli_failure(self) -> None:
         class RetrySource(DashboardSource):
             def __init__(self) -> None:
-                super().__init__(backend="v1", opencode_bin="/bin/false")
+                # An unreachable API keeps the test off any server on this machine.
+                super().__init__(backend="v1", api_url="http://127.0.0.1:1", opencode_bin="/bin/false")
                 self.calls: dict[str, int] = {}
 
             async def _command_json(

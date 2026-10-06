@@ -2619,12 +2619,17 @@ def read_local_statuses(
     return read_local_runtime_state(state_dir, proc_root, backend=backend).statuses
 
 
-def read_state_payload(path: Path) -> tuple[dict[str, Any] | None, tuple[int, int] | None]:
-    identity: tuple[int, int] | None = None
+def file_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Inode numbers are reused quickly, so the identity also pins size and timestamps."""
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+def read_state_payload(path: Path) -> tuple[dict[str, Any] | None, tuple[int, ...] | None]:
+    identity: tuple[int, ...] | None = None
     try:
         with path.open("r", encoding="utf-8") as handle:
             metadata = os.fstat(handle.fileno())
-            identity = (metadata.st_dev, metadata.st_ino)
+            identity = file_identity(metadata)
             if metadata.st_size > MAX_PERMISSION_STATE_BYTES:
                 return None, identity
             payload = json.load(handle)
@@ -2633,12 +2638,12 @@ def read_state_payload(path: Path) -> tuple[dict[str, Any] | None, tuple[int, in
     return (payload, identity) if isinstance(payload, dict) else (None, identity)
 
 
-def unlink_same_file(path: Path, identity: tuple[int, int] | None) -> None:
+def unlink_same_file(path: Path, identity: tuple[int, ...] | None) -> None:
     if identity is None:
         return
     try:
         current = path.stat()
-        if (current.st_dev, current.st_ino) == identity:
+        if file_identity(current) == identity:
             path.unlink()
     except OSError:
         pass

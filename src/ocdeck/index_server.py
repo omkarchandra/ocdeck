@@ -663,11 +663,43 @@ def invalid_json_constant(value: str) -> None:
     raise ValueError(f"Invalid JSON constant: {value}")
 
 
+MAX_JSON_DEPTH = 64
+
+
+def nested_too_deep(text: str) -> bool:
+    """True when brackets nest deeper than MAX_JSON_DEPTH, outside of strings.
+
+    Checked before parsing so behaviour does not depend on the interpreter's
+    recursion limit, which differs between Python versions.
+    """
+    depth = 0
+    in_string = escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                return True
+        elif character in "]}":
+            depth -= 1
+    return False
+
+
 def serve(server: IndexServer, incoming: TextIO | BinaryIO, outgoing: TextIO) -> None:
     for line in incoming:
         try:
             if isinstance(line, bytes):
                 line = line.decode("utf-8")
+            if nested_too_deep(line):
+                raise ValueError("JSON nesting too deep")
             request = json.loads(line, parse_constant=invalid_json_constant)
         except (ValueError, UnicodeError, RecursionError):
             response = rpc_error(None, -32700, "Parse error")
