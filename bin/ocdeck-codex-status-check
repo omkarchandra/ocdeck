@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Read one existing Codex thread's status; no approval or thread mutations."""
+import argparse
+import json
+import os
+from dataclasses import asdict
+from pathlib import Path
+
+from ocdeck.codex_status import read_statuses
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--thread", required=True)
+args = parser.parse_args()
+home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+statuses = read_statuses(home, [args.thread])
+print(json.dumps({native: asdict(status) for native, status in statuses.items()}))
+raise SystemExit(0 if statuses else 1)

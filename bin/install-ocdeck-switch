@@ -1,0 +1,28 @@
+#!/usr/bin/python3
+"""Install the current window router under a fresh GNOME module identity.
+
+GNOME 50 cannot reload already-imported extension modules in a live session.
+The D-Bus interface and settings schema remain stable across this handover.
+"""
+import json
+from pathlib import Path
+import shutil
+import subprocess
+
+source = Path(__file__).resolve().parents[1] / "desktop/gnome-extensions/ocdeck-switch@local"
+root = Path.home() / ".local/share/gnome-shell/extensions"
+uuid = "ocdeck-switch-v2@local"
+target = root / uuid
+if not root.is_dir():
+    raise SystemExit("GNOME extension installation directory is missing")
+if target.exists():
+    raise SystemExit(f"Extension already exists: {target}")
+target.mkdir()
+shutil.copyfile(source / "extension.js", target / "extension.js")
+metadata = json.loads((source / "metadata.json").read_text())
+metadata["uuid"] = uuid
+metadata["name"] = "OC Deck Switch (session-aware)"
+(target / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+shutil.copytree(source / "schemas", target / "schemas")
+subprocess.run(["glib-compile-schemas", str(target / "schemas")], check=True)
+print(uuid)

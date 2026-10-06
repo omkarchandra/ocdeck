@@ -1,0 +1,17 @@
+[Unit]
+Description=Dedicated OpenCode agent Chrome (persistent signed-in profile)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=@OCDECK_ROOT@/agent-browser
+ExecStart=@OCDECK_ROOT@/agent-browser/.venv/bin/python -B @OCDECK_ROOT@/agent-browser/agent_browser.py serve
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+# Let the controller save open destinations before signalling Chrome.
+KillMode=mixed
+# Keep the agent browser from driving the whole machine into swap.
+MemoryHigh=2500M
+MemoryMax=5G

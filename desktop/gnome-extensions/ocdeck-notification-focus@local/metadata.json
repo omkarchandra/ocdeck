@@ -1,0 +1,6 @@
+{
+  "uuid": "ocdeck-notification-focus@local",
+  "name": "OC Deck Notification Keyboard Focus",
+  "description": "Native Super+N focus and action cycling for desktop notifications.",
+  "shell-version": ["50"]
+}

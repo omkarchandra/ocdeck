@@ -1,0 +1,7 @@
+{
+  "uuid": "ocdeck-switch@local",
+  "name": "OC Deck Switch",
+  "description": "Native OC Deck launch/focus and exact tmux window routing for agent notifications.",
+  "shell-version": ["50"],
+  "settings-schema": "org.gnome.shell.extensions.ocdeck-switch"
+}

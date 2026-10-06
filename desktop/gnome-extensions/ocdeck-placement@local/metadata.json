@@ -1,0 +1,8 @@
+{
+  "uuid": "ocdeck-placement@local",
+  "name": "OC Deck Agent Windows",
+  "description": "Places newly opened OC Deck session windows at your pinned window position and size (Shift+P in OC Deck), or as quarter tiles beside the agent reference window.",
+  "shell-version": [
+    "50"
+  ]
+}

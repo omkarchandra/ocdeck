@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.ocdeck-switch"
+          path="/org/gnome/shell/extensions/ocdeck-switch/">
+    <key name="launch-switch" type="as">
+      <default>[]</default>
+      <summary>Optional direct GNOME shortcut for OC Deck</summary>
+      <description>Normally empty: GNOME custom shortcuts own Super+O and Super+N. This extension supplies compositor window inspection and tmux focus.</description>
+    </key>
+  </schema>
+</schemalist>

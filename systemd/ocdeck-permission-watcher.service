@@ -1,0 +1,15 @@
+[Unit]
+Description=OC Deck global OpenCode permission watcher
+After=graphical-session.target
+
+[Service]
+Type=exec
+Environment=OCDECK_BIN=%h/.local/bin/ocdeck-permission-watcher
+UnsetEnvironment=OCDECK_OPENCODE_BACKEND OPENCODE_URL OPENCODE_SERVER_PASSWORD OPENCODE_SERVER_USERNAME
+UMask=0077
+ExecStart=%h/.local/bin/ocdeck-entrypoint
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

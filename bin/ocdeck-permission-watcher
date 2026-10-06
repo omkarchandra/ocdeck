@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT="$(readlink -f -- "$0")"
+ROOT="$(CDPATH= cd -- "$(dirname -- "$SCRIPT")/.." && pwd)"
+exec "$ROOT/.venv/bin/python" "$ROOT/ocdeck_permission_watcher.py" "$@"

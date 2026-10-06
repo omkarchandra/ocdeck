@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="$(readlink -f -- "${BASH_SOURCE[0]}")"
+ROOT="$(dirname -- "$(dirname -- "$SOURCE")")"
+exec "$ROOT/.venv/bin/python" -B -m ocdeck.browser_cli "$@"

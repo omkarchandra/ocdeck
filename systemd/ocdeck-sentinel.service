@@ -1,0 +1,11 @@
+[Unit]
+Description=OC Deck Sentinel observation scan
+
+[Service]
+Type=oneshot
+WorkingDirectory=@OCDECK_ROOT@
+ExecStart=@OCDECK_ROOT@/.venv/bin/python -B -m ocdeck.sentinel --once
+UMask=0077
+Nice=10
+TimeoutStartSec=5min
+NoNewPrivileges=true

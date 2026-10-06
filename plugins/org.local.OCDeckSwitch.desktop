@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OC Deck Agent Notifications
+Comment=Actionable OpenCode agent notifications
+Exec=/usr/bin/true
+Icon=utilities-terminal
+Terminal=false
+NoDisplay=true
+DBusActivatable=true
+X-GNOME-UsesNotifications=true

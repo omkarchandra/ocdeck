@@ -1,0 +1,253 @@
+#!/usr/bin/python3
+import fcntl
+import os
+import secrets
+import stat
+import subprocess
+import sys
+
+
+# Match the managed entrypoint when invoked from an OpenCode tool terminal.
+desktop_config = os.path.expanduser("~/.config")
+if os.environ.get("XDG_CONFIG_HOME") == os.path.join(desktop_config, "ocdeck-v2-runtime"):
+    os.environ["XDG_CONFIG_HOME"] = desktop_config
+
+
+SERVICES = (
+    "ocdeck-permission-watcher.service",
+)
+
+
+def fail(message, status=1):
+    print(message, file=sys.stderr)
+    raise SystemExit(status)
+
+
+if len(sys.argv) != 2 or sys.argv[1] not in ("v1", "v2"):
+    fail("Usage: ocdeck-backend {v1|v2}", 2)
+backend = sys.argv[1]
+directory = os.environ.get(
+    "OCDECK_BACKEND_DIR",
+    os.path.join(
+        os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+        "ocdeck",
+    ),
+)
+systemctl = os.environ.get("OCDECK_SYSTEMCTL_BIN", "/usr/bin/systemctl")
+os.makedirs(directory, mode=0o700, exist_ok=True)
+
+directory_fd = -1
+writer_lock_fd = -1
+lock_fd = -1
+temporary_fd = -1
+temporary = ""
+backup = ""
+preserve_backup = False
+try:
+    directory_fd = os.open(
+        directory,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    metadata = os.fstat(directory_fd)
+    if metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+        fail("OC Deck backend selector directory must be owner-only")
+    writer_lock_fd = os.open(
+        ".backend.writer.lock",
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory_fd,
+    )
+    metadata = os.fstat(writer_lock_fd)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & 0o077
+    ):
+        fail("OC Deck backend selector writer lock must be owner-only")
+    fcntl.flock(writer_lock_fd, fcntl.LOCK_EX)
+    lock_fd = os.open(
+        ".backend.lock",
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory_fd,
+    )
+    metadata = os.fstat(lock_fd)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & 0o077
+    ):
+        fail("OC Deck backend selector lock must be owner-only")
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+    active = []
+    for service in SERVICES:
+        try:
+            result = subprocess.run(
+                [systemctl, "--user", "is-active", "--quiet", service],
+                check=False,
+            )
+        except OSError as error:
+            fail(f"Could not query selector-aware services: {error.strerror}")
+        if result.returncode == 0:
+            active.append(service)
+        elif result.returncode not in (3, 4):
+            fail(f"Could not query selector-aware service: {service}")
+
+    payload = f"{backend}\n".encode("ascii")
+    for _ in range(10):
+        temporary = f".backend.{secrets.token_hex(8)}.tmp"
+        try:
+            temporary_fd = os.open(
+                temporary,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_CLOEXEC
+                | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_fd,
+            )
+            break
+        except FileExistsError:
+            continue
+    if temporary_fd < 0:
+        fail("Could not allocate an OC Deck backend selector temporary file")
+    if os.write(temporary_fd, payload) != len(payload):
+        fail("Could not write the OC Deck backend selector")
+    os.fsync(temporary_fd)
+    os.close(temporary_fd)
+    temporary_fd = -1
+    existing_fd = -1
+    try:
+        existing_fd = os.open(
+            "backend",
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+    except FileNotFoundError:
+        pass
+    if existing_fd >= 0:
+        try:
+            metadata = os.fstat(existing_fd)
+            value = os.read(existing_fd, 4)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o077
+                or metadata.st_size != 3
+                or len(value) != metadata.st_size
+                or value not in (b"v1\n", b"v2\n")
+            ):
+                fail("Existing OC Deck backend selector is not safe")
+        finally:
+            os.close(existing_fd)
+        backup = f".backend.{secrets.token_hex(8)}.rollback"
+        os.link(
+            "backend",
+            backup,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        os.fsync(directory_fd)
+    os.replace(
+        temporary,
+        "backend",
+        src_dir_fd=directory_fd,
+        dst_dir_fd=directory_fd,
+    )
+    temporary = ""
+    try:
+        os.fsync(directory_fd)
+    except OSError:
+        try:
+            if backup:
+                os.replace(
+                    backup,
+                    "backend",
+                    src_dir_fd=directory_fd,
+                    dst_dir_fd=directory_fd,
+                )
+                backup = ""
+            else:
+                os.unlink("backend", dir_fd=directory_fd)
+            try:
+                os.fsync(directory_fd)
+            except OSError:
+                pass
+        except OSError as rollback_error:
+            preserve_backup = True
+            raise RuntimeError(
+                "OC Deck selector commit failed and rollback is ambiguous"
+            ) from rollback_error
+        raise
+    if backup:
+        committed_backup = backup
+        backup = ""
+        try:
+            os.unlink(committed_backup, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        except OSError:
+            pass
+    committed_lock_fd = lock_fd
+    lock_fd = -1
+    try:
+        os.close(committed_lock_fd)
+    except OSError:
+        pass
+
+    restart_failures = []
+    for service in active:
+        try:
+            result = subprocess.run(
+                [systemctl, "--user", "restart", service],
+                check=False,
+            )
+        except OSError:
+            result = None
+        if result is None or result.returncode != 0:
+            restart_failures.append(service)
+            print(f"Failed to restart selector-aware service: {service}", file=sys.stderr)
+    if restart_failures:
+        for service in active:
+            try:
+                result = subprocess.run(
+                    [systemctl, "--user", "stop", service],
+                    check=False,
+                )
+            except OSError:
+                result = None
+            if result is None or result.returncode != 0:
+                print(f"Failed to stop selector-aware service: {service}", file=sys.stderr)
+        fail("Selector-aware services were stopped after a restart failure")
+finally:
+    if temporary_fd >= 0:
+        os.close(temporary_fd)
+    if temporary and directory_fd >= 0:
+        try:
+            os.unlink(temporary, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+    if backup and directory_fd >= 0 and not preserve_backup:
+        try:
+            os.unlink(backup, dir_fd=directory_fd)
+        except OSError:
+            pass
+    if lock_fd >= 0:
+        try:
+            os.close(lock_fd)
+        except OSError:
+            pass
+    if writer_lock_fd >= 0:
+        try:
+            os.close(writer_lock_fd)
+        except OSError:
+            pass
+    if directory_fd >= 0:
+        try:
+            os.close(directory_fd)
+        except OSError:
+            pass
+
+print(f"OC Deck entrypoint backend: {backend}")

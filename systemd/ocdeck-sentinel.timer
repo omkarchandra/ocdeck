@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the OC Deck Sentinel observation artifact
+
+[Timer]
+OnStartupSec=20s
+OnUnitInactiveSec=15s
+AccuracySec=1s
+Unit=ocdeck-sentinel.service
+
+[Install]
+WantedBy=timers.target

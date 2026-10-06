@@ -1,0 +1,20 @@
+{
+  "name": "@ocdeck/opencode-v2-plugins",
+  "version": "2.0.14",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./permission-notify": "./permission-notify.js"
+  },
+  "scripts": {
+    "test": "node --test ../test_*.mjs",
+    "check": "node --check permission-notify.js && node --check permission-notify-core.js && node --check runtime.js && node --check session-notify-core.js && node --check session-notify-watcher.mjs && node --check read-api-core.js && node --check read-api-bridge.mjs"
+  },
+  "dependencies": {
+    "@opencode/client": "2.0.14",
+    "@opencode/plugin": "2.0.14"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

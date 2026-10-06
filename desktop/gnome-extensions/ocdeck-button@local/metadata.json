@@ -1,0 +1,6 @@
+{
+  "uuid": "ocdeck-button@local",
+  "name": "OC Deck Button",
+  "description": "Top-bar button that focuses OC Deck, or starts it, exactly like Super+O.",
+  "shell-version": ["50"]
+}

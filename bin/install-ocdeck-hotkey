@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Install the Super+O chain as a snapshot that repo edits cannot break.
+#
+#   bin/install-ocdeck-hotkey            install/refresh the snapshot
+#   bin/install-ocdeck-hotkey --rollback go back to the previous snapshot
+#
+# The snapshot (ocdeck_hotkey.py, focus_helper.py, ptyxis_tabs.py) lives in
+# ~/.local/lib/ocdeck-hotkey/current and ~/.local/bin/ocdeck-hotkey points at it.
+# A new snapshot is verified under the system Python before it replaces the old
+# one; on failure nothing changes.
+set -euo pipefail
+
+DASHBOARD="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)"
+LIB="${OCDECK_HOTKEY_LIB:-$HOME/.local/lib/ocdeck-hotkey}"
+BIN="${OCDECK_HOTKEY_BIN:-$HOME/.local/bin}"
+PYTHON="${OCDECK_SYSTEM_PYTHON:-/usr/bin/python3}"
+FILES=("$DASHBOARD/ocdeck_hotkey.py" "$DASHBOARD/src/ocdeck/focus_helper.py" "$DASHBOARD/src/ocdeck/ptyxis_tabs.py")
+
+link() {
+    mkdir -p "$BIN"
+    ln -sfn "$LIB/current/ocdeck_hotkey.py" "$BIN/ocdeck-hotkey.tmp"
+    mv -Tf "$BIN/ocdeck-hotkey.tmp" "$BIN/ocdeck-hotkey"
+}
+
+if [[ "${1:-}" == "--rollback" ]]; then
+    [[ -d "$LIB/previous" ]] || { echo "no previous snapshot to roll back to" >&2; exit 1; }
+    mv -T "$LIB/current" "$LIB/rolled-back.$$"
+    mv -T "$LIB/previous" "$LIB/current"
+    mv -T "$LIB/rolled-back.$$" "$LIB/previous"
+    link
+    echo "rolled back to the previous Super+O snapshot"
+    exit 0
+fi
+
+mkdir -p "$LIB"
+staging="$(mktemp -d "$LIB/.staging.XXXXXX")"
+trap 'rm -rf "$staging"' EXIT
+install -m 0755 "${FILES[0]}" "$staging/ocdeck_hotkey.py"
+install -m 0644 "${FILES[1]}" "$staging/focus_helper.py"
+install -m 0644 "${FILES[2]}" "$staging/ptyxis_tabs.py"
+printf "%s\n" "$DASHBOARD" > "$staging/workspace"
+git -C "$DASHBOARD" rev-parse --short HEAD > "$staging/revision" 2>/dev/null || echo unknown > "$staging/revision"
+
+# The snapshot must work on its own, exactly as Super+O runs it.
+if ! (cd / && "$PYTHON" -c 'import sys; sys.path.insert(0, sys.argv[1]); import focus_helper, ptyxis_tabs, ocdeck_hotkey' "$staging") ; then
+    echo "snapshot failed its self-check; the installed Super+O was left unchanged" >&2
+    exit 1
+fi
+
+rm -rf "$LIB/previous"
+[[ -d "$LIB/current" ]] && mv -T "$LIB/current" "$LIB/previous"
+mv -T "$staging" "$LIB/current"
+trap - EXIT
+link
+echo "Super+O now runs from $LIB/current (revision $(cat "$LIB/current/revision"))"

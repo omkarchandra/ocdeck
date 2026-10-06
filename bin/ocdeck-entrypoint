@@ -1,0 +1,146 @@
+#!/usr/bin/python3
+import fcntl
+import os
+import stat
+import subprocess
+import sys
+
+
+# Child tools inherit OpenCode's private XDG profile; OC Deck uses desktop state.
+desktop_config = os.path.expanduser("~/.config")
+if os.environ.get("XDG_CONFIG_HOME") == os.path.join(desktop_config, "ocdeck-v2-runtime"):
+    os.environ["XDG_CONFIG_HOME"] = desktop_config
+
+
+def fail(message, status=2):
+    print(message, file=sys.stderr)
+    raise SystemExit(status)
+
+
+if any(
+    len(option := argument.partition("=")[0]) > 2
+    and "--backend".startswith(option)
+    for argument in sys.argv[1:]
+):
+    fail("OC Deck managed entrypoints do not allow a backend override")
+
+selector = os.environ.get(
+    "OCDECK_BACKEND_FILE",
+    os.path.join(
+        os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+        "ocdeck",
+        "backend",
+    ),
+)
+directory = os.path.dirname(selector) or "."
+basename = os.path.basename(selector)
+directory_fd = -1
+lock_fd = -1
+selector_fd = -1
+try:
+    directory_fd = os.open(
+        directory,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    metadata = os.fstat(directory_fd)
+    if metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+        fail("OC Deck backend selector directory must be owner-only")
+    lock_fd = os.open(
+        ".backend.lock",
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        dir_fd=directory_fd,
+    )
+    metadata = os.fstat(lock_fd)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & 0o077
+    ):
+        fail("OC Deck backend selector lock must be owner-only")
+    fcntl.flock(lock_fd, fcntl.LOCK_SH)
+    selector_fd = os.open(
+        basename,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        dir_fd=directory_fd,
+    )
+    metadata = os.fstat(selector_fd)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & 0o077
+        or metadata.st_size != 3
+    ):
+        fail("OC Deck backend selector must be an owner-only regular file")
+    value = os.read(selector_fd, 4)
+    if len(value) != metadata.st_size:
+        fail("OC Deck backend selector changed while reading")
+    if value not in (b"v1\n", b"v2\n"):
+        fail("OC Deck backend selector must contain exactly 'v1' or 'v2'")
+    backend = value[:2].decode("ascii")
+
+    systemctl = os.environ.get("OCDECK_SYSTEMCTL_BIN", "/usr/bin/systemctl")
+    service = "opencode2-ready.service" if backend == "v2" else "opencode-web.service"
+    try:
+        # A managed user service is optional. Without one, OC Deck talks to the
+        # opencode command directly, so there is nothing to start.
+        managed = subprocess.run(
+            [systemctl, "--user", "cat", service],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        ).returncode == 0
+        result = None
+        if managed:
+            if sys.stdout.isatty():
+                print(f"Connecting to OpenCode {backend}…", flush=True)
+            result = subprocess.run(
+                [systemctl, "--user", "start", service],
+                check=False,
+            )
+    except OSError as error:
+        fail(f"Could not start the selected OpenCode service: {error.strerror}", 1)
+    if result is not None and result.returncode != 0:
+        fail(f"Could not start the selected OpenCode service: {service}", 1)
+except OSError as error:
+    fail(f"OC Deck backend selector cannot be read safely: {error.strerror}")
+finally:
+    if selector_fd >= 0:
+        try:
+            os.close(selector_fd)
+        except OSError:
+            pass
+    if lock_fd >= 0:
+        try:
+            os.close(lock_fd)
+        except OSError:
+            pass
+    if directory_fd >= 0:
+        try:
+            os.close(directory_fd)
+        except OSError:
+            pass
+
+environment = os.environ.copy()
+for name in tuple(environment):
+    if (
+        name.startswith("HOME_AGENT_GUARD_KEY")
+        or name
+        in {
+            "CREDENTIALS_DIRECTORY",
+            "OCDECK_BACKEND_FILE",
+            "OCDECK_BIN",
+            "OCDECK_OPENCODE_BACKEND",
+            "OCDECK_SYSTEMCTL_BIN",
+            "OPENCODE_SERVICE_FILE",
+            "OPENCODE_SERVER_PASSWORD",
+            "OPENCODE_SERVER_USERNAME",
+            "OPENCODE_URL",
+            "PLAYWRIGHT_MCP_EXTENSION_TOKEN",
+        }
+    ):
+        environment.pop(name, None)
+
+executable = os.environ.get("OCDECK_BIN", os.path.expanduser("~/.local/bin/ocdeck"))
+os.execve(
+    executable,
+    [executable, "--backend", backend, *sys.argv[1:]],
+    environment,
+)

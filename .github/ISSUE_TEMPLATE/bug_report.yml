@@ -1,0 +1,29 @@
+name: Bug report
+description: Something in OC Deck does not work as expected
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: OC Deck version
+      description: Output of `pip show ocdeck` (or the git commit)
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and desktop, Python version, which harnesses you use (OpenCode V1/V2, Claude Code, Codex), tmux version
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Which view and key. A copy of `ocdeck --once` output helps; remove anything private first.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce

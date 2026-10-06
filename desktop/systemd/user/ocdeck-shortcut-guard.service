@@ -1,0 +1,16 @@
+[Unit]
+Description=Preserve the managed OC Deck desktop shortcut
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+Environment=XDG_CONFIG_HOME=%h/.config
+ExecStart=%h/.local/bin/ocdeck-shortcut-guard
+Restart=on-failure
+RestartSec=5
+MemoryMax=64M
+NoNewPrivileges=true
+
+[Install]
+WantedBy=graphical-session.target
