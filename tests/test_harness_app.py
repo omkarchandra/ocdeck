@@ -247,7 +247,7 @@ class HarnessAppTests(unittest.IsolatedAsyncioTestCase):
             name, directory, command = launch.call_args.args[:3]
             self.assertEqual(name, "cc-aaa")
             self.assertEqual(Path(directory), self.workspace)
-            self.assertEqual(command, [CLAUDE_BINARY, "--resume", CLAUDE_NATIVE])
+            self.assertEqual(command, [CLAUDE_BINARY, "--no-chrome", "--resume", CLAUDE_NATIVE])
             self.assertEqual(launch.call_args.kwargs["title"], "Claude work")
 
     # --- 3. never double-start a live transcript ---------------------------
@@ -348,8 +348,8 @@ class HarnessAppTests(unittest.IsolatedAsyncioTestCase):
             run_opencode.assert_not_called()
             name, directory, command = launch.call_args.args[:3]
             self.assertEqual(Path(directory), self.workspace)
-            self.assertEqual(command[:2], [CLAUDE_BINARY, "--session-id"])
-            session_id = command[2]
+            self.assertEqual(command[:3], [CLAUDE_BINARY, "--no-chrome", "--session-id"])
+            session_id = command[3]
             uuid.UUID(session_id)  # a real, pre-assigned session id
             self.assertEqual(name, f"cc-{session_id}")
 

@@ -192,6 +192,10 @@ and saved settings. Newly installed harnesses appear without restarting the
 deck; existing adapter caches and the selected launch harness are retained.
 CLI/environment overrides stay pinned for that run.
 
+- **Your own Chrome stays out of it.** Every Claude Code session OC Deck launches
+  or resumes carries `--no-chrome`, so the Claude in Chrome extension never drives
+  your personal browser, whatever your global Claude setting says. A session you
+  grant the agent browser (`Shift+B`) reaches the dedicated agent browser instead.
 - **Sessions.** Claude Code sessions come from `~/.claude/projects/*/*.jsonl`;
   Codex sessions from `~/.codex/sessions/**/rollout-*.jsonl`. Sessions are
   joined to projects by directory, and the detail pane shows each project's

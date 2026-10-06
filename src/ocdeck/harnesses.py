@@ -805,9 +805,18 @@ class ClaudeHarness(TranscriptHarness):
         path = browser_mcp_config_file()
         return ["--mcp-config", str(path)] if path else []
 
+    def launch_arguments(self, browser: bool) -> list[str]:
+        """Options every OC Deck launch carries, before the session options.
+
+        ``--no-chrome`` keeps your own Chrome (the Claude in Chrome extension)
+        out of agent sessions, whatever the global default says. A
+        browser-granted session reaches the dedicated agent browser instead,
+        through --mcp-config; it is variadic, so it must precede other options.
+        """
+        return ["--no-chrome", *(self.browser_arguments() if browser else [])]
+
     def resume_command(self, session_id: str, directory: str, *, browser: bool = False) -> list[str]:
-        # --mcp-config is variadic, so it must precede the other options.
-        extra = self.browser_arguments() if browser else []
+        extra = self.launch_arguments(browser)
         return self.in_original_directory(
             session_id, directory, [self.binary or "claude", *extra, "--resume", session_id]
         )
@@ -816,7 +825,7 @@ class ClaudeHarness(TranscriptHarness):
         self, directory: str, prompt: str = "", *, browser: bool = False
     ) -> tuple[list[str], str]:
         session_id = _new_uuid()
-        extra = self.browser_arguments() if browser else []
+        extra = self.launch_arguments(browser)
         command = [self.binary or "claude", *extra, "--session-id", session_id]
         if prompt:
             command.append(prompt)

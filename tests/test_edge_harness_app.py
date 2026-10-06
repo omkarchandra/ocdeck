@@ -328,8 +328,8 @@ class EdgeHarnessAppTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(Path(directory), self.workspace)
                     self.assertEqual(command[0], CLAUDE_BINARY)
                     self.assertIn("--session-id", command)
-                    uuid.UUID(command[2])
-                    self.assertEqual(command[3], "continue from OpenCode")
+                    uuid.UUID(command[3])
+                    self.assertEqual(command[4], "continue from OpenCode")
                     mocks.run_opencode.assert_not_called()
                     self.assertIn(
                         "Handed off to Claude Code", self.notify_texts(notify)[-1]
@@ -461,10 +461,10 @@ class EdgeHarnessAppTests(unittest.IsolatedAsyncioTestCase):
                         name, directory, command = mocks.launch.call_args.args[:3]
                         self.assertTrue(str(name).startswith("cc-"), name)
                         self.assertEqual(Path(directory), self.workspace)
-                        self.assertEqual(command[:2], [CLAUDE_BINARY, "--session-id"])
+                        self.assertEqual(command[:3], [CLAUDE_BINARY, "--no-chrome", "--session-id"])
                         self.assertEqual(
                             grants,
-                            {f"claude:{command[2]}"},
+                            {f"claude:{command[3]}"},
                             "the fresh Claude session id must be pre-granted the agent browser",
                         )
                         mocks.run_opencode.assert_not_called()
@@ -545,7 +545,7 @@ class EdgeHarnessAppTests(unittest.IsolatedAsyncioTestCase):
                     name, directory, command = mocks.launch.call_args.args[:3]
                     self.assertEqual(name, "cc-aaa")
                     self.assertEqual(Path(directory), self.workspace)
-                    self.assertEqual(command, [CLAUDE_BINARY, "--resume", CLAUDE_NATIVE])
+                    self.assertEqual(command, [CLAUDE_BINARY, "--no-chrome", "--resume", CLAUDE_NATIVE])
                     pending = app._harness_launch_pending[CLAUDE_ID]
                     self.assertGreater(pending, time.monotonic())
                     self.assertLessEqual(pending, time.monotonic() + 15)

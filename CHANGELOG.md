@@ -6,6 +6,10 @@ All notable changes to OC Deck. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Claude Code sessions launched or resumed by OC Deck now start with `--no-chrome`, so
+  they never drive your personal Chrome through the Claude in Chrome extension.
+
 ## [0.1.0] — first public release
 
 OC Deck had been in daily private use before this release; this is its first

@@ -140,9 +140,10 @@ class ClaudeAdapterTests(unittest.TestCase):
 
     def test_commands(self):
         adapter = ClaudeHarness(Path("/nonexistent"), "/bin/claude")
-        self.assertEqual(adapter.resume_command("aaa", "/w"), ["/bin/claude", "--resume", "aaa"])
+        # Never your own Chrome: every OC Deck launch disables Claude in Chrome.
+        self.assertEqual(adapter.resume_command("aaa", "/w"), ["/bin/claude", "--no-chrome", "--resume", "aaa"])
         command, session_id = adapter.new_command("/w", "continue from handoff")
-        self.assertEqual(command, ["/bin/claude", "--session-id", session_id, "continue from handoff"])
+        self.assertEqual(command, ["/bin/claude", "--no-chrome", "--session-id", session_id, "continue from handoff"])
         self.assertEqual(len(session_id), 36)
         self.assertEqual(adapter.collect(processes=[], tmux={}), [])
 
@@ -200,11 +201,11 @@ class AgentBrowserTests(unittest.TestCase):
 
     def test_claude_gets_a_per_session_mcp_config_before_variadic_boundary(self):
         adapter = ClaudeHarness(Path(self.base.name), "/bin/claude")
-        self.assertEqual(adapter.resume_command("aaa", "/w"), ["/bin/claude", "--resume", "aaa"])
+        self.assertEqual(adapter.resume_command("aaa", "/w"), ["/bin/claude", "--no-chrome", "--resume", "aaa"])
         command = adapter.resume_command("aaa", "/w", browser=True)
-        self.assertEqual(command[1], "--mcp-config")
-        self.assertEqual(command[3:], ["--resume", "aaa"])
-        config_file = Path(command[2])
+        self.assertEqual(command[1:3], ["--no-chrome", "--mcp-config"])
+        self.assertEqual(command[4:], ["--resume", "aaa"])
+        config_file = Path(command[3])
         self.assertEqual(config_file.stat().st_mode & 0o777, 0o600)
         server = json.loads(config_file.read_text())["mcpServers"]["agent_browser"]
         self.assertEqual(server["command"], str(self.launcher))
@@ -224,7 +225,7 @@ class AgentBrowserTests(unittest.TestCase):
     def test_missing_browser_install_adds_nothing(self):
         self.launcher.unlink()
         self.assertEqual(ClaudeHarness(Path(self.base.name), "c").resume_command("a", "/w", browser=True),
-                         ["c", "--resume", "a"])
+                         ["c", "--no-chrome", "--resume", "a"])
 
     def test_grants_mark_sessions_browser_enabled(self):
         root = Path(self.base.name) / "projects"
@@ -458,6 +459,6 @@ class ProjectRoutingTests(unittest.TestCase):
             claude_transcript(Path(base) / "projects", "aaa", str(original))
             adapter = ClaudeHarness(Path(base) / "projects", "/bin/claude")
             adapter.collect(processes=[], tmux={})
-            self.assertEqual(adapter.resume_command("aaa", str(original)), ["/bin/claude", "--resume", "aaa"])
+            self.assertEqual(adapter.resume_command("aaa", str(original)), ["/bin/claude", "--no-chrome", "--resume", "aaa"])
             self.assertEqual(adapter.resume_command("aaa", "/elsewhere"),
-                             ["/usr/bin/env", "-C", str(original), "/bin/claude", "--resume", "aaa"])
+                             ["/usr/bin/env", "-C", str(original), "/bin/claude", "--no-chrome", "--resume", "aaa"])
