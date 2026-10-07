@@ -7,6 +7,8 @@ All notable changes to OC Deck. The format follows
 ## [Unreleased]
 
 ### Changed
+- Agent browser: the tab janitor no longer closes agent chat tabs (those opened with `?agentX=1`), closes ordinary tabs after 15 idle minutes instead of 5, and caps ordinary tabs at 12.
+- Agent browser: a memory guard flags (1.5 GB) or reloads (3 GB) heavy agent chat tabs instead of letting them grow; it never closes one.
 - Claude Code sessions launched or resumed by OC Deck now start with `--no-chrome`, so
   they never drive your personal Chrome through the Claude in Chrome extension.
 

@@ -7,3 +7,4 @@ node_modules/
 *.log
 .pytest_cache/
 docs/screenshots/*.svg
+agent-browser/flags/

@@ -3,8 +3,11 @@
 
 import argparse
 import json
+import contextlib
+import fcntl
 import os
 from pathlib import Path
+import re
 import signal
 import socket
 import subprocess
@@ -124,9 +127,12 @@ class CDP:
                                                    timeout=8, suppress_origin=True)
         self.counter = 0
 
-    def call(self, method, params=None):
+    def call(self, method, params=None, session=None):
         self.counter += 1
-        self.socket.send(json.dumps({"id": self.counter, "method": method, "params": params or {}}))
+        message = {"id": self.counter, "method": method, "params": params or {}}
+        if session:
+            message["sessionId"] = session  # talk to one tab through a flat session
+        self.socket.send(json.dumps(message))
         while True:
             message = json.loads(self.socket.recv())
             if message.get("id") != self.counter:
@@ -258,9 +264,20 @@ def clean(config, keep=1):
         cdp.close()
 
 
-DEFAULT_PURGE_IDLE_MINUTES = 5
+DEFAULT_PURGE_IDLE_MINUTES = 15
+DEFAULT_MAX_TABS = 12
+CAP_IDLE_SECONDS = 120      # over the cap, only tabs idle this long are closed
 PURGE_POLL_SECONDS = 30
 DEFAULT_KEEP_TABS = ("https://calendar.google.com/",)
+# Every agent's chat tab carries its owner in the address (?agentA=1, ?agentB=1, ...).
+# The janitor never closes these: they are long conversations an agent is waiting on.
+AGENT_TAB = re.compile(r"[?&](agent[A-Z])=1(?:&|#|$)")
+MEMORY_POLL_SECONDS = 120
+HEAP_FLAG_BYTES = int(1.5 * 2**30)    # ask the owning agent to reload its own tab
+HEAP_RELOAD_BYTES = 3 * 2**30         # reload it for the agent (never close it)
+LOW_MEMORY_BYTES = 2 * 2**30          # machine nearly out of memory: reload the heaviest
+RELOAD_COOLDOWN_SECONDS = 600
+DEFAULT_FLAG_DIR = Path(__file__).resolve().parent / "flags"
 
 
 class TabJanitor:
@@ -273,11 +290,16 @@ class TabJanitor:
     alive, and tabs restored after a restart are cleaned like any other.
     """
 
-    def __init__(self, keep_prefixes, idle_seconds, now):
+    def __init__(self, keep_prefixes, idle_seconds, now, max_tabs=0):
         self.keep = tuple(prefix for prefix in keep_prefixes if isinstance(prefix, str) and prefix)
         self.idle_seconds = idle_seconds
+        self.max_tabs = max_tabs
         self.seen = {}  # target -> ((url, title), unchanged since)
         self.started = now
+
+    def protected(self, url):
+        """The owner's standing tabs and every agent's chat tab are never auto-closed."""
+        return url.startswith(self.keep) or AGENT_TAB.search(url) is not None
 
     def observe(self, pages, now):
         seen = {}
@@ -287,11 +309,19 @@ class TabJanitor:
             since = previous[1] if previous and previous[0] == state else now
             seen[target] = (state, since)
         self.seen = seen
-        if self.idle_seconds <= 0 or not seen:
+        if not seen:
             return []
-        stale = [target for target, ((url, _title), since) in seen.items()
-                 if now - since >= self.idle_seconds and not url.startswith(self.keep)]
-        if len(stale) == len(seen):  # never close every page: keep the newest
+        stale = []
+        if self.idle_seconds > 0:
+            stale = [target for target, ((url, _title), since) in seen.items()
+                     if now - since >= self.idle_seconds and not self.protected(url)]
+        excess = len(seen) - len(stale) - self.max_tabs if self.max_tabs > 0 else 0
+        if excess > 0:  # over the cap: the oldest idle ordinary tabs go first
+            candidates = sorted((since, target) for target, ((url, _title), since) in seen.items()
+                                if target not in stale and not self.protected(url)
+                                and now - since >= CAP_IDLE_SECONDS)
+            stale += [target for _since, target in candidates[:excess]]
+        if stale and len(stale) == len(seen):  # never close every page: keep the newest
             newest = max(stale, key=lambda target: seen[target][1])
             stale.remove(newest)
         return stale
@@ -316,14 +346,130 @@ def purge_idle_tabs(config, janitor, now=None):
     return closing
 
 
+def agent_marker(url):
+    """``agentC`` for a tab opened with ?agentC=1, else None."""
+    match = AGENT_TAB.search(url or "")
+    return match.group(1) if match else None
+
+
+def available_memory_bytes(path="/proc/meminfo"):
+    try:
+        for line in Path(path).read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def plan_memory_actions(heaps, available, now, last_reload, *, cooldown=RELOAD_COOLDOWN_SECONDS):
+    """Decide from measured JS heap sizes: ``heaps`` is {target: (marker, bytes)}.
+
+    Returns (flag_targets, reload_targets). Tabs at or above the flag size ask
+    their agent to reload; tabs above the reload size, or the heaviest flagged
+    tab while the machine is short of memory, are reloaded for it. Never closed.
+    """
+    flags = [target for target, (_marker, size) in heaps.items() if size >= HEAP_FLAG_BYTES]
+    wanted = {target for target, (_marker, size) in heaps.items() if size >= HEAP_RELOAD_BYTES}
+    if available is not None and available < LOW_MEMORY_BYTES and flags:
+        wanted.add(max(flags, key=lambda target: heaps[target][1]))
+    reloads = [target for target in sorted(wanted, key=lambda target: -heaps[target][1])
+               if now - last_reload.get(target, -cooldown) >= cooldown]
+    return flags, reloads
+
+
+def measure_heap(cdp, target):
+    """JS heap in use by one tab, over a throwaway session on the existing connection."""
+    session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
+    try:
+        cdp.call("Performance.enable", session=session)
+        metrics = cdp.call("Performance.getMetrics", session=session)["metrics"]
+        return int(next(item["value"] for item in metrics if item["name"] == "JSHeapUsedSize"))
+    finally:
+        with contextlib.suppress(RuntimeError, OSError, websocket.WebSocketException):
+            cdp.call("Target.detachFromTarget", {"sessionId": session})
+
+
+@contextlib.contextmanager
+def browser_lock_free(path):
+    """Yield True when the agents' shared-browser lock was taken without waiting."""
+    if not path:
+        yield True
+        return
+    with open(path, "a+") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def reload_tab(cdp, target):
+    session = cdp.call("Target.attachToTarget", {"targetId": target, "flatten": True})["sessionId"]
+    try:
+        cdp.call("Page.reload", session=session)
+    finally:
+        with contextlib.suppress(RuntimeError, OSError, websocket.WebSocketException):
+            cdp.call("Target.detachFromTarget", {"sessionId": session})
+
+
+def memory_pass(config, last_reload, now=None):
+    """Measure agent chat tabs; flag heavy ones, reload very heavy ones. Never closes."""
+    now = time.monotonic() if now is None else now
+    flag_dir = Path(config.get("flag_dir") or DEFAULT_FLAG_DIR)
+    cdp = CDP(config)
+    try:
+        agents = {target: agent_marker(url) for target, url, _title in page_targets(cdp) if agent_marker(url)}
+        heaps = {}
+        for target, marker in agents.items():
+            try:
+                heaps[target] = (marker, measure_heap(cdp, target))
+            except (RuntimeError, OSError, ValueError, KeyError, StopIteration, websocket.WebSocketException):
+                continue  # a tab that is closing or navigating is simply skipped
+        flags, reloads = plan_memory_actions(heaps, available_memory_bytes(), now, last_reload)
+        flag_dir.mkdir(parents=True, exist_ok=True)
+        flagged = {heaps[target][0] for target in flags}
+        for marker in {marker for marker, _size in heaps.values()} - flagged:
+            (flag_dir / f"{marker}_reload").unlink(missing_ok=True)  # the condition has cleared
+        for target in flags:
+            marker, size = heaps[target]
+            flag = flag_dir / f"{marker}_reload"
+            if not flag.exists():
+                flag.write_text(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} heap {size // 2**20} MB: reload your own tab\n")
+                print(f"{marker}: tab heap {size // 2**20} MB; asked its agent to reload (flag written)", flush=True)
+        done = []
+        for target in reloads:
+            marker, size = heaps[target]
+            with browser_lock_free(config.get("browser_lock", "")) as free:
+                if not free:
+                    print(f"{marker}: tab heap {size // 2**20} MB; browser lock busy, will retry", flush=True)
+                    continue
+                reload_tab(cdp, target)
+                last_reload[target] = now
+                done.append(target)
+                print(f"{marker}: reloaded its tab (heap {size // 2**20} MB); the chat is kept on the server", flush=True)
+        return heaps, done
+    finally:
+        cdp.close()
+
+
 def start_tab_janitor(config):
     minutes = config.get("purge_idle_minutes", DEFAULT_PURGE_IDLE_MINUTES)
     if not isinstance(minutes, (int, float)) or minutes <= 0:
         return None
     keep = config.get("keep_tabs", list(DEFAULT_KEEP_TABS))
-    janitor = TabJanitor(keep if isinstance(keep, list) else [], minutes * 60, time.monotonic())
+    max_tabs = config.get("max_tabs", DEFAULT_MAX_TABS)
+    janitor = TabJanitor(keep if isinstance(keep, list) else [], minutes * 60, time.monotonic(),
+                         max_tabs if isinstance(max_tabs, int) and max_tabs > 0 else 0)
+    last_reload = {}
+    next_memory_pass = time.monotonic() + MEMORY_POLL_SECONDS
 
     def loop():
+        nonlocal next_memory_pass
         while True:
             time.sleep(PURGE_POLL_SECONDS)
             try:
@@ -332,6 +478,12 @@ def start_tab_janitor(config):
                     print(f"Closed {len(closed)} idle agent tab(s)", flush=True)
             except (OSError, ValueError, RuntimeError, websocket.WebSocketException) as error:
                 print(f"Agent tab cleanup skipped: {error}", file=sys.stderr, flush=True)
+            if config.get("memory_guard", True) and time.monotonic() >= next_memory_pass:
+                next_memory_pass = time.monotonic() + MEMORY_POLL_SECONDS
+                try:
+                    memory_pass(config, last_reload)
+                except (OSError, ValueError, RuntimeError, websocket.WebSocketException) as error:
+                    print(f"Agent tab memory check skipped: {error}", file=sys.stderr, flush=True)
 
     threading.Thread(target=loop, name="tab-janitor", daemon=True).start()
     return janitor

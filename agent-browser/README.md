@@ -67,6 +67,33 @@ oc_agent_browser mode headless           # restart with no window/GPU (lower mem
 oc_agent_browser mode headed             # restart with a visible window
 ```
 
+### Tab cleanup and memory
+
+While the browser runs, a small janitor keeps it tidy. All of it is configurable in
+`agent-browser.json`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `purge_idle_minutes` | `15` | Close an ordinary tab whose address and title have not changed for this long. `0` turns the janitor, including the memory guard, off. |
+| `max_tabs` | `12` | Above this many tabs, close the oldest idle ordinary tabs first (a tab must have been idle for 2 minutes). `0` removes the cap. |
+| `keep_tabs` | Google Calendar | Address prefixes that are never closed. |
+| `memory_guard` | `true` | Watch the memory of agent chat tabs (below). |
+| `flag_dir` | `agent-browser/flags` | Where the memory guard leaves its notes. |
+| `browser_lock` | none | A lock file your agents take for every browser action (`flock`); the guard only reloads a tab when it can take it without waiting. |
+
+**Agent chat tabs are never closed.** Each agent opens its tab with a marker in the
+address, `?agentA=1`, `?agentB=1`, `?agentC=1`, and so on. The janitor leaves any tab
+carrying `?agentX=1` alone, because an agent may be waiting on a long conversation in it.
+
+**Heavy chat tabs are measured, not closed.** A very long chat makes its tab grow. Every
+2 minutes the guard reads each agent tab's JavaScript heap over a throwaway DevTools
+session. At **1.5 GB** it writes `flags/agentX_reload` (one line) so the owning agent can
+reload its own tab; the flag is removed once the tab is small again. At **3 GB**, or for
+the heaviest flagged tab while the machine has under **2 GB** of free memory, the guard
+reloads the tab itself, only if `browser_lock` is free and at most once every 10 minutes.
+The chat stays on the server, so a reload loses nothing but an unsent draft. It never
+closes a tab. The thresholds are constants at the top of `agent_browser.py`.
+
 ### Cloudflare / sign-in recovery
 
 In testing, ChatGPT remained on a Cloudflare 403 verification page

@@ -242,3 +242,128 @@ class WaylandWindowTests(unittest.TestCase):
         self.assertTrue(browser.wayland_window(config))
         self.assertFalse(browser.wayland_window({**config, "headless": True}))
         self.assertFalse(browser.wayland_window({k: v for k, v in config.items() if k != "window_backend"}))
+
+
+class AgentTabAndCapTests(unittest.TestCase):
+    """Agent chat tabs (?agentA=1 ...) are never auto-closed; the rest is kept tidy."""
+
+    CHAT = "https://claude.ai/chat/3dac03f2?agentA=1&artifact=e400"
+
+    def test_the_marker_is_read_only_from_a_real_agent_query_flag(self):
+        for url, marker in ((self.CHAT, "agentA"), ("https://x/?a=1&agentC=1", "agentC"),
+                            ("https://x/?agentB=1#top", "agentB"), ("https://x/?agentB=1", "agentB")):
+            self.assertEqual(browser.agent_marker(url), marker, url)
+        for url in ("https://x/?agentA=10", "https://x/?agentAB=1", "https://x/agentA=1",
+                    "https://x/?notagentA=1", "https://x/", ""):
+            self.assertIsNone(browser.agent_marker(url), url)
+
+    def test_an_idle_agent_tab_is_never_closed_but_ordinary_idle_tabs_are(self):
+        janitor = browser.TabJanitor([], idle_seconds=900, now=0)
+        pages = [("chat", self.CHAT, "Claude"), ("paper", "https://pubmed/1", "Paper"),
+                 ("chat2", "https://claude.ai/chat/9?agentC=1", "Claude")]
+        janitor.observe(pages, 0)
+        self.assertEqual(janitor.observe(pages, 10_000), ["paper"])
+
+    def test_the_idle_period_defaults_to_fifteen_minutes(self):
+        self.assertEqual(browser.DEFAULT_PURGE_IDLE_MINUTES, 15)
+        self.assertEqual(browser.DEFAULT_MAX_TABS, 12)
+
+    def test_over_the_cap_the_oldest_idle_ordinary_tabs_close_first(self):
+        janitor = browser.TabJanitor([], idle_seconds=900, now=0, max_tabs=4)
+        pages = [(f"t{index}", f"https://site/{index}", "T") for index in range(4)]
+        pages += [("chat", self.CHAT, "Claude"), ("fresh", "https://site/new", "New")]
+        janitor.observe(pages[:4] + [pages[4]], 0)
+        janitor.observe(pages, 100)  # "fresh" appears at t=100; the others have been idle longer
+        closing = janitor.observe(pages, 200)
+        # 6 tabs, cap 4: two go. Idle for at least 120 s is required, so "fresh" (100 s) stays;
+        # the chat tab is exempt; the two oldest of t0..t3 close.
+        self.assertEqual(len(closing), 2)
+        self.assertNotIn("chat", closing)
+        self.assertNotIn("fresh", closing)
+
+    def test_the_cap_never_closes_a_tab_that_is_still_busy(self):
+        janitor = browser.TabJanitor([], idle_seconds=0, now=0, max_tabs=1)
+        pages = [("a", "https://a/", "A"), ("b", "https://b/", "B")]
+        janitor.observe(pages, 0)
+        self.assertEqual(janitor.observe(pages, 60), [])  # idle only 60 s
+        self.assertEqual(len(janitor.observe(pages, 130)), 1)
+
+
+class MemoryGuardTests(unittest.TestCase):
+    GB = 2**30
+
+    def test_plan_flags_then_reloads_and_never_closes(self):
+        heaps = {"small": ("agentA", self.GB // 2), "heavy": ("agentB", 2 * self.GB),
+                 "huge": ("agentC", 4 * self.GB)}
+        flags, reloads = browser.plan_memory_actions(heaps, 20 * self.GB, now=1000, last_reload={})
+        self.assertEqual(sorted(flags), ["heavy", "huge"])
+        self.assertEqual(reloads, ["huge"])
+
+    def test_a_short_machine_reloads_only_the_heaviest_flagged_tab(self):
+        heaps = {"a": ("agentA", 2 * self.GB), "b": ("agentB", int(1.6 * self.GB)),
+                 "c": ("agentC", self.GB // 4)}
+        _flags, reloads = browser.plan_memory_actions(heaps, self.GB, now=1000, last_reload={})
+        self.assertEqual(reloads, ["a"])
+        _flags, reloads = browser.plan_memory_actions({"c": heaps["c"]}, self.GB, now=1000, last_reload={})
+        self.assertEqual(reloads, [])  # nothing is heavy enough to be worth a reload
+
+    def test_a_reloaded_tab_is_left_alone_for_the_cooldown(self):
+        heaps = {"huge": ("agentC", 4 * self.GB)}
+        self.assertEqual(browser.plan_memory_actions(heaps, None, 1000, {"huge": 900})[1], [])
+        self.assertEqual(browser.plan_memory_actions(heaps, None, 1600, {"huge": 900})[1], ["huge"])
+
+    def test_a_pass_writes_flags_reloads_when_the_lock_is_free_and_closes_nothing(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as base:
+            lock = Path(base) / "browser.lock"
+            config = {"flag_dir": str(Path(base) / "flags"), "browser_lock": str(lock)}
+            cdp = mock.Mock()
+            sizes = {"mid": 2 * self.GB, "huge": 4 * self.GB, "ok": self.GB // 8}
+            pages = [("mid", "https://c/1?agentA=1", "T"), ("huge", "https://c/2?agentB=1", "T"),
+                     ("ok", "https://c/3?agentC=1", "T"), ("plain", "https://c/4", "T")]
+            with mock.patch.object(browser, "CDP", return_value=cdp), \
+                    mock.patch.object(browser, "page_targets", return_value=pages), \
+                    mock.patch.object(browser, "measure_heap", side_effect=lambda _cdp, target: sizes[target]), \
+                    mock.patch.object(browser, "available_memory_bytes", return_value=20 * self.GB), \
+                    mock.patch.object(browser, "reload_tab") as reload:
+                heaps, done = browser.memory_pass(config, {}, now=1000)
+            self.assertEqual(done, ["huge"])
+            reload.assert_called_once_with(cdp, "huge")
+            self.assertTrue((Path(base) / "flags/agentA_reload").exists())
+            self.assertTrue((Path(base) / "flags/agentB_reload").exists())
+            self.assertFalse((Path(base) / "flags/agentC_reload").exists())
+            self.assertNotIn("plain", heaps)  # only agent tabs are measured
+            for call in cdp.call.mock_calls:
+                self.assertNotIn("closeTarget", str(call))
+
+    def test_a_busy_browser_lock_defers_the_reload(self):
+        import fcntl, tempfile
+        with tempfile.TemporaryDirectory() as base:
+            lock = Path(base) / "browser.lock"
+            config = {"flag_dir": str(Path(base) / "flags"), "browser_lock": str(lock)}
+            held = open(lock, "a+")
+            fcntl.flock(held, fcntl.LOCK_EX)  # an agent is mid-action
+            try:
+                with mock.patch.object(browser, "CDP", return_value=mock.Mock()), \
+                        mock.patch.object(browser, "page_targets", return_value=[("t", "https://c/?agentA=1", "T")]), \
+                        mock.patch.object(browser, "measure_heap", return_value=4 * self.GB), \
+                        mock.patch.object(browser, "available_memory_bytes", return_value=None), \
+                        mock.patch.object(browser, "reload_tab") as reload:
+                    _heaps, done = browser.memory_pass(config, {}, now=1000)
+                reload.assert_not_called()
+                self.assertEqual(done, [])
+            finally:
+                held.close()
+
+    def test_a_cleared_flag_is_removed(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as base:
+            flags = Path(base) / "flags"
+            flags.mkdir()
+            (flags / "agentA_reload").write_text("old")
+            with mock.patch.object(browser, "CDP", return_value=mock.Mock()), \
+                    mock.patch.object(browser, "page_targets", return_value=[("t", "https://c/?agentA=1", "T")]), \
+                    mock.patch.object(browser, "measure_heap", return_value=self.GB // 8), \
+                    mock.patch.object(browser, "available_memory_bytes", return_value=None):
+                browser.memory_pass({"flag_dir": str(flags)}, {}, now=1000)
+            self.assertFalse((flags / "agentA_reload").exists())
