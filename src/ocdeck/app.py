@@ -45,7 +45,7 @@ from .backend import read_saved_backend
 from .direct_terminal import close_renderers, direct_renderers, read_opencode_processes
 from .harnesses import (
     HARNESS_BADGES, HARNESS_LABELS, HARNESS_STYLES, SCRATCH_PROJECT_ID, MultiHarnessSource, build_adapters,
-    agent_browser_server, load_browser_grants, load_harness_settings, model_name,
+    agent_browser_server, is_transcript_subagent, load_browser_grants, load_harness_settings, model_name,
     resolve_enabled_harnesses, runtime_label, save_browser_grants, split_session_key,
 )
 from .recent_open import (
@@ -3542,6 +3542,14 @@ class OCDeckApp(App[None]):
         self, session: SessionRecord, title_override: str | None = None, *, auto: bool = False
     ) -> bool:
         """Single routing path for normal opens and history restoration."""
+        if is_transcript_subagent(session):
+            # A helper agent has no terminal or resumable session of its own:
+            # open the session that spawned it.
+            parent = self.session_by_id.get(session.parent_id)
+            if parent is None:
+                self.notify("This helper agent's parent session is not listed", severity="warning")
+                return False
+            return self._open_existing_session(parent, title_override, auto=auto)
         # Relaunching a closed session makes it the owner's from now on. Only
         # viewing a live one (e.g. peeking at an agent's work) changes nothing.
         if session.instance_count <= 0:

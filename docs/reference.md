@@ -200,6 +200,15 @@ CLI/environment overrides stay pinned for that run.
   Codex sessions from `~/.codex/sessions/**/rollout-*.jsonl`. Sessions are
   joined to projects by directory, and the detail pane shows each project's
   git branch and number of changed files.
+- **Helper agents.** When a Claude Code session spawns agents with its Agent
+  tool, their transcripts (`<session>/subagents/agent-<id>.jsonl`, titled from the
+  matching `.meta.json`) appear as `[Subagent]` children nested under that
+  session, like OpenCode's child sessions. One shows `RUN` only while its
+  parent CLI is alive and its own transcript is mid-turn and was written in the
+  last two minutes; otherwise it is a finished child. They have no terminal:
+  `o` on one opens the session that spawned it. At most the 100 newest are read,
+  and only those whose parent session is listed. Codex helper agents are not
+  tracked yet.
 - **Agents board.** The RUNTIME column shows harness and model: short codes
   on narrow windows (`CC OP5`, `OC AST`, `CX CDX`) and full names on wide ones
   (`Claude Code · claude-opus-5-5`). STATE uses `RUN`, `PERM`, `ASK`, `RTRY`,

@@ -85,7 +85,9 @@ class ClaudeAdapterTests(unittest.TestCase):
             write_jsonl(root / "-work-alpha/aaa/subagents/agent-1.jsonl", [{"type": "user", "cwd": "/x"}])
             (root / "-work-alpha/broken.jsonl").write_text("not json\n")
             sessions = {s.id: s for s in ClaudeHarness(root, "claude").collect(processes=[], tmux={})}
-            self.assertEqual(set(sessions), {"claude:aaa", "claude:bbb"})
+            # A helper agent's transcript is never a top-level session; it nests under its parent.
+            self.assertEqual({k for k, v in sessions.items() if not v.parent_id}, {"claude:aaa", "claude:bbb"})
+            self.assertEqual(sessions["claude:agent-1"].parent_id, "claude:aaa")
             alpha = sessions["claude:aaa"]
             self.assertEqual(alpha.title, "My rename")
             self.assertEqual(sessions["claude:bbb"].title, "fix the deck bugs")

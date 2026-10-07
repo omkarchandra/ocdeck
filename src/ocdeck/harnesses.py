@@ -125,6 +125,13 @@ SETTING_VALUES = {"on", "off", "auto"}
 # A transcript written this recently belongs to a turn that is still running.
 BUSY_WINDOW_SECONDS = 10
 MAX_SESSIONS_PER_HARNESS = 200
+# Subagent transcripts are numerous and short-lived; they are capped on their own
+# so they can never push a real session out of the list above.
+MAX_SUBAGENTS_PER_HARNESS = 100
+# A subagent has no process of its own. It counts as running while its parent CLI
+# is alive, its last entry leaves the turn open, and it wrote something this recently.
+SUBAGENT_BUSY_SECONDS = 120
+SUBAGENT_ID_PREFIX = "agent-"
 HEAD_LINES = 60
 TAIL_BYTES = 64 * 1024
 
@@ -317,6 +324,8 @@ class TranscriptInfo:
     # How the CLI was launched, when the transcript records it: a Claude
     # transcript "entrypoint" or a Codex rollout "source". "" when unrecorded.
     launch_source: str = ""
+    # Set for a subagent transcript: the native id of the session that spawned it.
+    parent_session_id: str = ""
 
 
 @dataclass(slots=True)
@@ -485,6 +494,7 @@ class TranscriptHarness:
         self.root = root
         self.binary = binary
         self._cache: dict[Path, _CacheEntry] = {}
+        self._subagent_cache: dict[Path, _CacheEntry] = {}
         # Native session id -> pids of its live CLI processes (last collect).
         self.live_pids: dict[str, tuple[int, ...]] = {}
         self.stoppable_pids: dict[str, tuple[int, ...]] = {}
@@ -495,6 +505,13 @@ class TranscriptHarness:
 
     def parse_transcript(self, path: Path, size: int) -> TranscriptInfo | None:
         raise NotImplementedError
+
+    def subagent_files(self) -> list[Path]:
+        """Transcripts of helper agents a session spawned; none by default."""
+        return []
+
+    def parse_subagent(self, path: Path, size: int) -> TranscriptInfo | None:
+        return None
 
     def process_session_id(self, process: LiveProcess) -> str:
         raise NotImplementedError
@@ -643,7 +660,48 @@ class TranscriptHarness:
                 launch_source=info.launch_source,
                 browser_enabled=self.session_key(info.session_id) in grants,
             ))
+        records.extend(self._subagent_records(records, now))
         return self.apply_permission_status(records)
+
+    def _subagent_records(self, parents: list[SessionRecord], now: float) -> list[SessionRecord]:
+        """Helper agents a listed session spawned, nested under it by ``parent_id``.
+
+        They have no process or terminal. One counts as busy only while its parent
+        CLI is alive and its own transcript shows an unfinished turn that was
+        written to recently; otherwise it is a finished (idle) child.
+        """
+        by_native = {record.id.partition(":")[2]: record for record in parents}
+        records: list[SessionRecord] = []
+        try:
+            infos = self._subagent_transcripts()
+        except Exception:  # a broken helper layout must never hide real sessions
+            return records
+        for info in infos:
+            parent = by_native.get(info.parent_session_id)
+            if parent is None:
+                continue  # the session that spawned it is not listed
+            fresh = now * 1000 - info.updated_ms < SUBAGENT_BUSY_SECONDS * 1000
+            running = parent.instance_count > 0 and fresh and info.turn_open is not False
+            records.append(SessionRecord(
+                id=self.session_key(info.session_id),
+                title=info.title or "Subagent",
+                directory=info.directory or parent.directory,
+                project_id="",
+                created_ms=info.created_ms,
+                updated_ms=info.updated_ms,
+                last_interaction_ms=info.prompt_ms or info.created_ms,
+                assistant_activity_ms=info.updated_ms,
+                assistant_done_ms=info.done_ms,
+                status="busy" if running else "idle",
+                instance_count=0,
+                last_prompt=info.last_prompt,
+                assistant_active=running,
+                model=info.model,
+                harness=self.harness,
+                launch_source=info.launch_source,
+                parent_id=parent.id,
+            ))
+        return records
 
     def apply_permission_status(self, records: list[SessionRecord]) -> list[SessionRecord]:
         """Hook for a harness whose transcripts don't carry approval state.
@@ -655,34 +713,50 @@ class TranscriptHarness:
         return records
 
     def _transcripts(self) -> list[TranscriptInfo]:
+        return self._parsed(
+            self.transcript_files(), self.parse_transcript, self._cache, MAX_SESSIONS_PER_HARNESS
+        )
+
+    def _subagent_transcripts(self) -> list[TranscriptInfo]:
+        return self._parsed(
+            self.subagent_files(), self.parse_subagent, self._subagent_cache, MAX_SUBAGENTS_PER_HARNESS
+        )
+
+    def _parsed(
+        self,
+        paths: list[Path],
+        parse: Callable[[Path, int], TranscriptInfo | None],
+        cache: dict[Path, _CacheEntry],
+        limit: int,
+    ) -> list[TranscriptInfo]:
         files: list[tuple[float, Path, os.stat_result]] = []
-        for path in self.transcript_files():
+        for path in paths:
             try:
                 metadata = path.stat()
             except OSError:
                 continue
             files.append((metadata.st_mtime, path, metadata))
         files.sort(key=lambda item: item[0], reverse=True)
-        files = files[:MAX_SESSIONS_PER_HARNESS]
+        files = files[:limit]
         seen: set[Path] = set()
         infos: list[TranscriptInfo] = []
         for _, path, metadata in files:
             seen.add(path)
             key = (metadata.st_mtime_ns, metadata.st_size)
-            cached = self._cache.get(path)
+            cached = cache.get(path)
             if cached is None or cached.key != key:
                 try:
-                    info = self.parse_transcript(path, metadata.st_size)
+                    info = parse(path, metadata.st_size)
                 except Exception:  # a corrupt transcript must never break the deck
                     info = None
                 if info is not None and not info.updated_ms:
                     info.updated_ms = int(metadata.st_mtime * 1000)
                 cached = _CacheEntry(key, info)
-                self._cache[path] = cached
+                cache[path] = cached
             if cached.info is not None:
                 infos.append(cached.info)
-        for stale in set(self._cache) - seen:
-            del self._cache[stale]
+        for stale in set(cache) - seen:
+            del cache[stale]
         return infos
 
 
@@ -694,12 +768,69 @@ class ClaudeHarness(TranscriptHarness):
         super().__init__(root or Path.home() / ".claude/projects", binary or find_binary("claude"))
 
     def transcript_files(self) -> list[Path]:
-        # Subagent transcripts live one level deeper and are intentionally skipped.
+        # Subagent transcripts live one level deeper; subagent_files() lists those.
         try:
             return [path for directory in self.root.iterdir() if directory.is_dir()
                     for path in directory.glob("*.jsonl")]
         except OSError:
             return []
+
+    def subagent_files(self) -> list[Path]:
+        """``<project>/<session id>/subagents/agent-<id>.jsonl`` (+ ``.meta.json``)."""
+        try:
+            return [path for directory in self.root.iterdir() if directory.is_dir()
+                    for path in directory.glob("*/subagents/agent-*.jsonl")]
+        except OSError:
+            return []
+
+    def parse_subagent(self, path: Path, size: int) -> TranscriptInfo | None:
+        agent_id = path.stem.removeprefix(SUBAGENT_ID_PREFIX)
+        parent_session_id = path.parent.parent.name
+        if not agent_id or not parent_session_id:
+            return None
+        meta = _read_json_file(path.with_suffix(".meta.json"))
+        head = _read_head(path, 12)
+        directory = task = model = ""
+        created = 0
+        for entry in head:
+            directory = directory or clean_string(entry.get("cwd"))
+            created = created or _timestamp_ms(entry.get("timestamp"))
+            if entry.get("type") == "assistant":
+                model = model or _claude_model(entry)
+            if not task and entry.get("type") == "user":
+                message = entry.get("message")
+                task = _message_text(message.get("content") if isinstance(message, dict) else "")
+        updated = done_ms = 0
+        turn_open: bool | None = None
+        for entry in _read_tail(path, size):
+            stamp = _timestamp_ms(entry.get("timestamp"))
+            updated = max(updated, stamp)
+            kind = entry.get("type")
+            if kind == "user":
+                turn_open = True
+            elif kind == "assistant":
+                message = entry.get("message")
+                stop = message.get("stop_reason") if isinstance(message, dict) else None
+                model = _claude_model(entry) or model
+                if entry.get("isApiErrorMessage") or stop in CLAUDE_FINAL_STOP_REASONS:
+                    done_ms, turn_open = stamp or done_ms, False
+                else:
+                    turn_open = True
+            # attachments and bookkeeping entries do not change the turn
+        description = clean_string(meta.get("description")) or clean_string(meta.get("agentType"))
+        return TranscriptInfo(
+            session_id=f"{SUBAGENT_ID_PREFIX}{agent_id}",
+            directory=directory,
+            title=_one_line(description or task, 80),
+            created_ms=created,
+            updated_ms=updated,
+            last_prompt=_one_line(task),
+            model=model,
+            prompt_ms=created,
+            done_ms=done_ms,
+            turn_open=turn_open,
+            parent_session_id=parent_session_id,
+        )
 
     def parse_transcript(self, path: Path, size: int) -> TranscriptInfo | None:
         head = _read_head(path)
@@ -973,6 +1104,18 @@ def _claude_model(entry: dict[str, Any]) -> str:
     return "" if model == "<synthetic>" or entry.get("isApiErrorMessage") else model
 
 
+# A Claude message that ends its turn (anything else, e.g. "tool_use", continues it).
+CLAUDE_FINAL_STOP_REASONS = {"end_turn", "stop_sequence", "max_tokens", "refusal"}
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 CLAUDE_INPUT_TOOLS = {
     "AskUserQuestion": "Claude is asking a question — open its terminal to answer",
     "ExitPlanMode": "Claude's plan is waiting for approval — open its terminal to respond",
@@ -1061,6 +1204,15 @@ def _new_uuid() -> str:
     import uuid
 
     return str(uuid.uuid4())
+
+
+def is_transcript_subagent(session: Any) -> bool:
+    """A Claude/Codex helper agent row: it nests under a parent and has no session to resume."""
+    return (
+        getattr(session, "harness", "") in {"claude", "codex"}
+        and bool(getattr(session, "parent_id", ""))
+        and split_session_key(session.id)[1].startswith(SUBAGENT_ID_PREFIX)
+    )
 
 
 def split_session_key(session_id: str) -> tuple[str, str]:
