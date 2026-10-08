@@ -354,7 +354,7 @@ class HarnessAppTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(name, f"cc-{session_id}")
 
     # --- 7. OpenCode-only guards ------------------------------------------
-    async def test_permission_approval_is_opencode_only(self) -> None:
+    async def test_claude_y_without_a_pending_permission_does_nothing(self) -> None:
         async with self.running() as (app, pilot):
             await pilot.press("1")
             await pilot.pause()
@@ -364,9 +364,26 @@ class HarnessAppTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.object(app, "notify") as notify:
                 await pilot.press("y")
                 await pilot.pause()
-            self.assertIn("Permission approval is OpenCode-only", notify.call_args.args[0])
+            self.assertIn("No pending permission for this session", notify.call_args.args[0])
             self.assertEqual(self.source.approvals, [])
             self.assertEqual(app._permission_replies_in_flight, set())
+
+    async def test_claude_y_allows_a_pending_permission_once(self) -> None:
+        async with self.running() as (app, pilot):
+            await pilot.press("1")
+            await pilot.pause()
+            self.source.snap = replace(self.source.snap, sessions=tuple(
+                replace(item, permission="Bash touch probe.txt", permission_id="req123")
+                if item.id == CLAUDE_ID else item
+                for item in self.source.snap.sessions))
+            app._apply_snapshot(self.source.snap)
+            await pilot.pause()
+            table = app.query_one("#sessions-table", DataTable)
+            focus_row(app, table, CLAUDE_ID)
+            await pilot.pause()
+            await pilot.press("y")
+            await pilot.pause()
+            self.assertEqual(self.source.approvals, [(CLAUDE_ID, "req123")])
 
     async def test_rename_is_opencode_only(self) -> None:
         async with self.running() as (app, _pilot):

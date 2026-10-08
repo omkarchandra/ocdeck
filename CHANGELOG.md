@@ -7,6 +7,7 @@ All notable changes to OC Deck. The format follows
 ## [Unreleased]
 
 ### Added
+- Claude Code permission prompts show as `PERM` in the deck and `y` allows one once (OC Deck-launched sessions carry a `PermissionRequest` hook; the terminal prompt keeps working).
 - Claude Code helper agents (spawned with the Agent tool) are tracked as `[Subagent]` children nested under the session that spawned them; `o` on one opens its parent.
 
 ### Changed

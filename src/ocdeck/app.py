@@ -4253,7 +4253,7 @@ class OCDeckApp(App[None]):
         if not session:
             self.notify("Select a session first", severity="warning")
             return
-        if self._opencode_only(session, "Permission approval"):
+        if session_harness(session) != "claude" and self._opencode_only(session, "Permission approval"):
             return
         display_state = self._agent_display_state(session)
         permission_session = self._agent_attention_source(session)

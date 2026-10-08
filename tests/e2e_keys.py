@@ -194,7 +194,8 @@ def run(keep: bool) -> int:
             tag = harness.capitalize()
             check(f"{tag}: cursor reaches the session", select(runtime), box.screen()[-400:])
             box.keys("y", pause=0.8)
-            check(f"{tag}: y explains approval is OpenCode-only", "OpenCode-only" in box.screen())
+            expected = "No pending permission" if harness == "claude" else "OpenCode-only"
+            check(f"{tag}: y says {expected!r}", expected in box.screen())
             before = len(box.calls())
             box.keys("o", pause=1.5)
             new = box.calls()[before:]

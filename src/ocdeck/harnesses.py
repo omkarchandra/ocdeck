@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .models import DashboardSnapshot, ProjectRecord, SessionRecord, clean_string
+from . import claude_permissions
 from .codex_status import apply_statuses as apply_codex_statuses, read_statuses as read_codex_statuses
 
 # --- harness registry ----------------------------------------------------------
@@ -936,15 +937,57 @@ class ClaudeHarness(TranscriptHarness):
         path = browser_mcp_config_file()
         return ["--mcp-config", str(path)] if path else []
 
+    def apply_permission_status(self, records: list[SessionRecord]) -> list[SessionRecord]:
+        """Show a permission prompt that a session is waiting on (see claude_permissions)."""
+        try:
+            pending = claude_permissions.pending_requests()
+        except Exception:  # a broken state folder must never hide sessions
+            return records
+        if not pending:
+            return records
+        result = []
+        for record in records:
+            request = pending.get(record.id.partition(":")[2]) if record.instance_count else None
+            result.append(
+                replace(record, permission=request.summary or request.tool or "Permission required",
+                        permission_id=request.request_id)
+                if request else record
+            )
+        return result
+
+    def permission_settings_arguments(self) -> list[str]:
+        """``--settings`` file attaching the hook that lets the deck answer a prompt."""
+        if os.environ.get("OCDECK_CLAUDE_PERMISSION_HOOK", "1") == "0":
+            return []
+        payload = claude_permissions.hook_settings()
+        path = _ocdeck_config_dir() / "claude-permission-hook.json"
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            current = None
+        if current != payload:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+                temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+                os.replace(temporary, path)
+            except OSError:
+                return []
+        return ["--settings", str(path)]
+
     def launch_arguments(self, browser: bool) -> list[str]:
         """Options every OC Deck launch carries, before the session options.
 
-        ``--no-chrome`` keeps your own Chrome (the Claude in Chrome extension)
-        out of agent sessions, whatever the global default says. A
-        browser-granted session reaches the dedicated agent browser instead,
-        through --mcp-config; it is variadic, so it must precede other options.
+        ``--no-chrome`` keeps your own Chrome (the Claude in Chrome
+        extension) out of agent sessions, whatever the global default says.
+        ``--settings`` adds the permission hook, so ``y`` in the deck can allow a
+        prompt once. A browser-granted session reaches the dedicated agent browser
+        instead, through --mcp-config; it is variadic, so it must come last.
         """
-        return ["--no-chrome", *(self.browser_arguments() if browser else [])]
+        return [
+            "--no-chrome", *self.permission_settings_arguments(),
+            *(self.browser_arguments() if browser else []),
+        ]
 
     def resume_command(self, session_id: str, directory: str, *, browser: bool = False) -> list[str]:
         extra = self.launch_arguments(browser)
@@ -1413,6 +1456,15 @@ class MultiHarnessSource:
                             if (harness == "opencode" and bool(binary))
                             or (harness != "opencode" and harness in enabled))
         return enabled, build_adapters(enabled), binary
+
+    async def approve_permission(self, session_id: str, permission_id: str) -> str:
+        """Allow one pending permission once; "" on success, else why not."""
+        harness, native = split_session_key(session_id)
+        if harness == "claude":
+            return await asyncio.to_thread(claude_permissions.approve, native, permission_id)
+        if self._opencode is None or not hasattr(self._opencode, "approve_permission"):
+            return "Permission approval is unavailable for this session"
+        return await self._opencode.approve_permission(session_id, permission_id)
 
     async def collect_activity(self) -> DashboardSnapshot | None:
         if self.opencode_enabled:

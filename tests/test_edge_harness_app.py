@@ -741,7 +741,7 @@ class EdgeHarnessAppTests(unittest.IsolatedAsyncioTestCase):
                             self.assertNotIn("main", str(call))
 
     # --- 8. y and rename are OpenCode-only on foreign harnesses --------------
-    async def test_permission_y_and_rename_on_a_claude_session_are_opencode_only(self) -> None:
+    async def test_permission_y_and_rename_on_a_claude_session(self) -> None:
         async with self.running() as (app, pilot):
             with mock.patch.object(app, "notify") as notify:
                 await pilot.press("1")
@@ -750,11 +750,7 @@ class EdgeHarnessAppTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 await pilot.press("y")
                 await pilot.pause()
-                self.assertIn(
-                    "Permission approval is OpenCode-only; use the Claude Code "
-                    "terminal for this session",
-                    self.notify_texts(notify)[-1],
-                )
+                self.assertIn("No pending permission for this session", self.notify_texts(notify)[-1])
                 self.assertEqual(app._permission_replies_in_flight, set())
                 app._begin_rename(CLAUDE_ID)
                 self.assertIn(

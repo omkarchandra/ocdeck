@@ -244,9 +244,19 @@ CLI/environment overrides stay pinned for that run.
   through `--mcp-config` (Claude) or `-c mcp_servers…` (Codex); no global
   configuration changes. The grant file only records the operator's choice. It
   is not a security boundary.
-- **OpenCode-only actions.** Approving permissions (`y`) and renaming work
-  only for OpenCode sessions. On other harnesses OC Deck says so instead of
-  acting.
+- **Claude Code permissions.** A Claude session that OC Deck launches or
+  resumes carries a `PermissionRequest` hook (`--settings`, file
+  `~/.config/ocdeck/claude-permission-hook.json`). When Claude asks to run
+  something, the row shows `PERM` with what it wants, and `y` allows it once,
+  exactly like OpenCode. Claude's own prompt still appears in the terminal at the
+  same time; answering there works too and clears the `PERM` within a second.
+  The deck never denies and never allows "always". If nobody answers in 90
+  seconds (`OCDECK_PERMISSION_WAIT`) the hook steps aside and the terminal prompt
+  stays. Sessions started outside OC Deck have no hook, so they show no `PERM`.
+  Set `OCDECK_CLAUDE_PERMISSION_HOOK=0` to launch without it.
+- **OpenCode-only actions.** Renaming works only for OpenCode sessions, and
+  approving permissions (`y`) only for OpenCode and Claude Code. On other
+  harnesses OC Deck says so instead of acting.
 
 ### Choosing a harness and agent
 
@@ -332,7 +342,7 @@ skipped with a warning.
 | `Enter` in ALARMS | Locate the exact known session in Operations |
 | `Shift+L` in AGENTS | Relaunch all previously open agent sessions (press twice to confirm) |
 | `z` in AGENTS | Close every attached agent terminal window and leave its tmux session running in the background (press twice to confirm); a window that also hosts other tabs is detached but never closed |
-| `y` | Approve the selected pending permission once |
+| `y` | Approve the selected pending permission once (OpenCode and Claude Code) |
 | `g` | Jump to the first pending permission |
 | Click a session's name | Rename it; `Enter` saves, `Esc` cancels |
 | `a` / **Auto** | New/resume with `--auto`; server-attached browser sessions reopen with their saved server permissions |
