@@ -37,6 +37,19 @@ def feed(process, event):
     process.stdin.close()
 
 
+def finish(process, seconds=15):
+    """Wait for the hook, then read what it printed.
+
+    Not Popen.communicate(): once stdin was closed by hand, Python 3.12 raises
+    "I/O operation on closed file" from it where 3.14 does not.
+    """
+    process.wait(timeout=seconds)
+    try:
+        return process.stdout.read()
+    finally:
+        process.stdout.close()
+
+
 def run_clear(directory, event):
     environment = {**os.environ, "OCDECK_CLAUDE_PERMISSIONS_DIR": str(directory), "PYTHONPATH": SRC}
     return subprocess.run([sys.executable, "-m", "ocdeck.claude_permissions", "clear"], env=environment,
@@ -63,7 +76,7 @@ def test_the_deck_allowing_a_request_makes_the_hook_print_claudes_allow_decision
     request = wait_for(lambda: pending(tmp_path).get(SESSION))
     assert (request.tool, request.summary) == ("Bash", "Bash touch probe.txt")
     assert perms.approve(SESSION, request.request_id, tmp_path) == ""
-    output, _ = process.communicate(timeout=15)
+    output = finish(process)
     assert json.loads(output) == {"hookSpecificOutput": {
         "hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}}
     assert list(tmp_path.iterdir()) == []  # request and decision are both cleaned up
@@ -72,7 +85,7 @@ def test_the_deck_allowing_a_request_makes_the_hook_print_claudes_allow_decision
 def test_with_no_answer_the_hook_prints_nothing_so_the_terminal_prompt_decides(tmp_path):
     process = start_hook(tmp_path, wait=1)
     feed(process, EVENT)
-    output, _ = process.communicate(timeout=15)
+    output = finish(process)
     assert output == "" and process.returncode == 0
     assert list(tmp_path.iterdir()) == []
 
@@ -109,7 +122,7 @@ def test_a_post_tool_event_for_the_same_call_clears_the_request_at_once(tmp_path
     assert pending(tmp_path), "a different tool call must not clear the request"
     same = {**EVENT, "hook_event_name": "PostToolUse", "tool_use_id": "t2"}
     run_clear(tmp_path, same)
-    output, _ = process.communicate(timeout=10)  # the hook gives up as soon as its request is gone
+    output = finish(process, 10)  # the hook gives up as soon as its request is gone
     assert output == "" and pending(tmp_path) == {}
 
 
@@ -176,7 +189,7 @@ def test_the_multi_harness_source_routes_claude_approval_to_the_hook(tmp_path, m
     opencode = OpenCode()
     source = MultiHarnessSource(opencode, [])
     assert asyncio.run(source.approve_permission(f"claude:{SESSION}", request.request_id)) == ""
-    assert process.communicate(timeout=15)[0].strip() != ""
+    assert finish(process).strip() != ""
     assert asyncio.run(source.approve_permission("ses_abc", "perm1")) == ""
     assert opencode.calls == [("ses_abc", "perm1")]  # OpenCode still goes to OpenCode
     assert "no longer waiting" in asyncio.run(source.approve_permission(f"claude:{SESSION}", "gone00000000"))
