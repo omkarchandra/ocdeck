@@ -253,7 +253,9 @@ CLI/environment overrides stay pinned for that run.
   The deck never denies and never allows "always". If nobody answers in 90
   seconds (`OCDECK_PERMISSION_WAIT`) the hook steps aside and the terminal prompt
   stays. Sessions started outside OC Deck have no hook, so they show no `PERM`.
-  Set `OCDECK_CLAUDE_PERMISSION_HOOK=0` to launch without it.
+  Set `OCDECK_CLAUDE_PERMISSION_HOOK=0` to launch without it. The same file also
+  attaches a status line that reports the plan's 5-hour and 7-day usage to the
+  **USAGE** tab (`OCDECK_CLAUDE_USAGE_STATUSLINE=0` turns that off).
 - **OpenCode-only actions.** Renaming works only for OpenCode sessions, and
   approving permissions (`y`) only for OpenCode and Claude Code. On other
   harnesses OC Deck says so instead of acting.
@@ -329,6 +331,7 @@ skipped with a warning.
 | `4` | Live agents board |
 | `5` | Portfolio briefing and next steps |
 | `6` | Sentinel health and global alarms |
+| `7` | Token usage and what is left, per provider |
 | `Ctrl+Left` / `Ctrl+Right` | Previous or next view |
 | `Tab` / `Shift+Tab` | Move focus through controls |
 | `Up` / `Down` or `j` / `k` | Move through rows |
@@ -651,6 +654,36 @@ V2 pending permission and form state comes from the authenticated OpenAPI
 operations. V1 can additionally reconcile state published locally by the
 permission-notify plugin, so rollback-mode requests can remain visible when its
 legacy API is locked.
+
+## Token usage and what is left
+
+Press **7** for the **USAGE** view: one block per provider, Anthropic (Claude Code)
+first, then OpenAI (Codex) and every provider reached through OpenCode. It reads
+local files only (no network, no credentials) and re-reads every 30 seconds while
+it is showing (`r` refreshes now).
+
+| Source | Tokens spent (5h / 24h / 7d) | What is left |
+| --- | --- | --- |
+| Claude Code | summed from `~/.claude/projects` transcripts, each message once (helpers included) | the plan's real 5h and 7d usage and reset time, reported by Claude Code to a status line that OC Deck attaches to the sessions it launches (`usage/claude-rate-limits.json`) |
+| Codex | summed from the `token_count` events in `~/.codex/sessions` | the rate-limit reading stored in every rollout; one whose window has reset is shown as "waiting for a new reading", never as a stale percentage |
+| OpenCode providers | per `providerID` from the V2 database (read-only), with cost where OpenCode records one | nothing is reported, so set a budget (below) |
+
+"Tokens" are fresh input plus output; cache reads are listed apart as "cached"
+because they are most of the count and cost far less. A Claude reading appears
+once a session launched from OC Deck has answered; sessions started elsewhere do
+not report it.
+
+To see "left" for a provider that reports no limit, add a budget in
+`~/.config/ocdeck/usage.json`. Keys are `claude-code`, `codex` or
+`opencode:<providerID>` (the tab prints the ones it found); windows are `5h`,
+`24h` or `7d`; units are `usd` and/or `tokens`:
+
+```json
+{"limits": {"opencode:opencode-go": {"7d": {"usd": 30}}, "opencode:deepseek": {"24h": {"tokens": 20000000}}}}
+```
+
+A real provider limit is never replaced by a budget. `python -m ocdeck.usage`
+prints the same figures as text.
 
 ## Sentinel health and alarms
 

@@ -7,6 +7,7 @@ All notable changes to OC Deck. The format follows
 ## [Unreleased]
 
 ### Added
+- **USAGE tab (`7`)**: token usage and what is left, per provider, from local files only. Claude Code's real 5-hour and 7-day plan usage (reported by a status line attached to sessions OC Deck launches; `OCDECK_CLAUDE_USAGE_STATUSLINE=0` turns it off), Codex's stored rate-limit reading, and per-provider tokens and cost for everything run through OpenCode. Optional budgets in `~/.config/ocdeck/usage.json` give providers that report no limit a "left" figure. `python -m ocdeck.usage` prints the same numbers.
 - Claude Code permission prompts show as `PERM` in the deck and `y` allows one once (OC Deck-launched sessions carry a `PermissionRequest` hook; the terminal prompt keeps working).
 - Claude Code helper agents (spawned with the Agent tool) are tracked as `[Subagent]` children nested under the session that spawned them; `o` on one opens its parent.
 

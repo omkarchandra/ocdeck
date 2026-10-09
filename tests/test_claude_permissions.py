@@ -217,4 +217,5 @@ def test_launch_arguments_attach_the_hook_through_a_settings_file(tmp_path, monk
 def test_the_hook_can_be_switched_off(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("OCDECK_CLAUDE_PERMISSION_HOOK", "0")
+    monkeypatch.setenv("OCDECK_CLAUDE_USAGE_STATUSLINE", "0")
     assert ClaudeHarness(tmp_path / "projects", "/bin/claude").launch_arguments(False) == ["--no-chrome"]

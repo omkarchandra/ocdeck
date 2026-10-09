@@ -91,6 +91,8 @@ from .source import (
 )
 from .tmux_header import apply_header, headers_for_sessions
 from .v2_interrupt import IDLE, INTERRUPTED, NOT_OPENCODE, interrupt_v2_turn
+from .usage import UsageReport, collect_usage
+from .usage_view import UsageView, render_usage
 from .sentinel.acks import ack_path, append_ack
 from .sentinel.health import SentinelHealth, SentinelReport, read_report
 
@@ -366,6 +368,7 @@ class NextStepsView(VerticalScroll, can_focus=True):
 class OCDeckApp(App[None]):
     TITLE = "OC Deck"
     SUB_TITLE = "OpenCode operations console"
+    usage_report: UsageReport | None = None
 
     CSS = """
     Screen {
@@ -900,6 +903,7 @@ class OCDeckApp(App[None]):
         Binding("4", "show_tab('agents')", "Agents", show=False),
         Binding("5", "show_tab('next')", "Next", show=False),
         Binding("6", "show_tab('alarms')", "Alarms", show=False),
+        Binding("7", "show_tab('usage')", "Usage", show=False),
         Binding("ctrl+left", "cycle_view(-1)", "Previous view", show=False),
         Binding("ctrl+right", "cycle_view(1)", "Next view", show=False),
         Binding("escape", "clear_search", "Clear search", show=False),
@@ -1100,6 +1104,9 @@ class OCDeckApp(App[None]):
                 yield Static(id="alarms-health")
                 yield AlarmsTable(id="alarms-table")
                 yield Static(id="alarm-detail")
+            with TabPane("07 / USAGE", id="usage"):
+                with UsageView(id="usage-view"):
+                    yield Static("Reading local usage…", id="usage-content")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -1121,8 +1128,15 @@ class OCDeckApp(App[None]):
             # Independent of source collection: a stalled backend must not hide
             # a stopped scanner. This reads only the bounded alarm artifact.
             self.set_interval(5, self._sentinel_refresh_worker)
+            self.set_interval(30, self._usage_tick)
 
     def _on_active_tab_changed(self, active: str) -> None:
+        if active == "usage":
+            self.requested_tab_id = active
+            self._render_usage()
+            self._usage_refresh_worker()
+            self.query_one("#usage-view", UsageView).focus()
+            return
         if active == "alarms":
             self.requested_tab_id = active
             self._render_alarms()
@@ -1211,6 +1225,21 @@ class OCDeckApp(App[None]):
     def action_refresh_data(self) -> None:
         self._sentinel_refresh_worker()
         self._request_refresh()
+        self._usage_tick()
+
+    def _usage_tick(self) -> None:
+        """Re-read the usage files, only while the USAGE tab is showing."""
+        if self.query_one("#tabs", TabbedContent).active == "usage":
+            self._usage_refresh_worker()
+
+    @work(group="usage", exclusive=True, exit_on_error=False)
+    async def _usage_refresh_worker(self) -> None:
+        self.usage_report = await asyncio.to_thread(collect_usage)
+        self._render_usage()
+
+    def _render_usage(self) -> None:
+        if self.usage_report is not None:
+            self.query_one("#usage-content", Static).update(render_usage(self.usage_report))
 
     @work(group="sentinel-health", exclusive=True, exit_on_error=False)
     async def _sentinel_refresh_worker(self) -> None:
@@ -3427,7 +3456,7 @@ class OCDeckApp(App[None]):
 
     def action_cycle_view(self, direction: int) -> None:
         tabs = self.query_one("#tabs", TabbedContent)
-        view_ids = ("overview", "services", "keys-view", "agents", "next", "alarms")
+        view_ids = ("overview", "services", "keys-view", "agents", "next", "alarms", "usage")
         current = view_ids.index(tabs.active) if tabs.active in view_ids else 0
         self.action_show_tab(view_ids[(current + direction) % len(view_ids)])
 
@@ -3478,6 +3507,8 @@ class OCDeckApp(App[None]):
             target = self.query_one("#agents-table", DataTable)
         elif tab_id == "alarms":
             target = self.query_one("#alarms-table", DataTable)
+        elif tab_id == "usage":
+            target = self.query_one("#usage-view", UsageView)
         elif tab_id == "next":
             target = self.query_one("#next-view", NextStepsView)
         else:
@@ -5479,7 +5510,7 @@ KEY_REFERENCE = """
 
 | Key | Signal |
 | --- | --- |
-| **1 / 2 / 3 / 4 / 5 / 6** | Switch operations, services, keys, agents, next steps, and alarms |
+| **1 / 2 / 3 / 4 / 5 / 6 / 7** | Switch operations, services, keys, agents, next steps, alarms, and token usage |
 | **Ctrl+← / Ctrl+→** | Switch to the previous or next view |
 | **Tab / Shift+Tab** | Move focus through the controls |
 | **/** | Search all sessions; scoped-project matches rank first |

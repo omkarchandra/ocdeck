@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .models import DashboardSnapshot, ProjectRecord, SessionRecord, clean_string
-from . import claude_permissions
+from . import claude_permissions, usage_statusline
 from .codex_status import apply_statuses as apply_codex_statuses, read_statuses as read_codex_statuses
 
 # --- harness registry ----------------------------------------------------------
@@ -956,10 +956,15 @@ class ClaudeHarness(TranscriptHarness):
         return result
 
     def permission_settings_arguments(self) -> list[str]:
-        """``--settings`` file attaching the hook that lets the deck answer a prompt."""
-        if os.environ.get("OCDECK_CLAUDE_PERMISSION_HOOK", "1") == "0":
+        """``--settings`` file: the hook that lets the deck answer a prompt, and the status
+        line that reports the plan's 5h / 7d usage (each has its own off switch)."""
+        payload: dict[str, Any] = {}
+        if os.environ.get("OCDECK_CLAUDE_PERMISSION_HOOK", "1") != "0":
+            payload.update(claude_permissions.hook_settings())
+        if os.environ.get("OCDECK_CLAUDE_USAGE_STATUSLINE", "1") != "0":
+            payload.update(usage_statusline.statusline_settings())
+        if not payload:
             return []
-        payload = claude_permissions.hook_settings()
         path = _ocdeck_config_dir() / "claude-permission-hook.json"
         try:
             current = json.loads(path.read_text(encoding="utf-8"))

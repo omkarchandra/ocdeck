@@ -336,7 +336,7 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(app.screen.focused, NextStepsView)
             self.assertEqual(
                 [pane.id for pane in app.query(TabPane)],
-                ["overview", "services", "keys-view", "agents", "next", "alarms"],
+                ["overview", "services", "keys-view", "agents", "next", "alarms", "usage"],
             )
             self.assertEqual(app.selected_project_id, "p1")
             self.assertIn("Secret [bold] summary", rendered_next_text(app))
@@ -361,6 +361,9 @@ class AppTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.query_one("#tabs", TabbedContent).active, "alarms")
             self.assertIs(app.focused, app.query_one("#alarms-table", DataTable))
+            await pilot.press("ctrl+right")
+            await pilot.pause()
+            self.assertEqual(app.query_one("#tabs", TabbedContent).active, "usage")
             await pilot.press("ctrl+right")
             await pilot.pause()
             self.assertEqual(app.query_one("#tabs", TabbedContent).active, "overview")
