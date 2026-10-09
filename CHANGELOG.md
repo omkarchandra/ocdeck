@@ -12,6 +12,7 @@ All notable changes to OC Deck. The format follows
 - Claude Code helper agents (spawned with the Agent tool) are tracked as `[Subagent]` children nested under the session that spawned them; `o` on one opens its parent.
 
 ### Changed
+- Agent browser: optional `"extensions": false` in `agent-browser.json` launches Chrome with `--disable-extensions` (agents use the debugging port only); restarting also drops claude.ai's `artifact=` panel parameter and repeated addresses from the saved tabs. Defaults are unchanged.
 - `x x` on a running Claude Code session interrupts the turn with one Esc and keeps the session open, instead of closing the terminal (only after checking the pane runs Claude and shows "esc to interrupt"; a pending permission dialog is never answered by it).
 - Agent browser: the tab janitor no longer closes agent chat tabs (those opened with `?agentX=1`), closes ordinary tabs after 15 idle minutes instead of 5, and caps ordinary tabs at 12.
 - Agent browser: a memory guard flags (1.5 GB) or reloads (3 GB) heavy agent chat tabs instead of letting them grow; it never closes one.

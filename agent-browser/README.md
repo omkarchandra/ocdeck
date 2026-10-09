@@ -94,6 +94,20 @@ reloads the tab itself, only if `browser_lock` is free and at most once every 10
 The chat stays on the server, so a reload loses nothing but an unsent draft. It never
 closes a tab. The thresholds are constants at the top of `agent_browser.py`.
 
+### Keeping it light
+
+The agent profile starts as a copy of the owner's, extensions included, and most memory
+goes to the claude.ai chat pages themselves. Two things trim the rest:
+
+- `"extensions": false` in `agent-browser.json` launches Chrome with `--disable-extensions`: no
+  background page per extension and no extension scripts injected into every chat. Agents drive
+  the browser over the debugging port, so none is needed; sign-ins live in the profile and are
+  unaffected. The old OpenCode V1 tools attach through the Playwright *extension*, so set it back
+  to `true` if you roll back to V1. It takes effect at the next browser start.
+- When Chrome reopens the saved tabs it drops claude.ai's `artifact=` panel parameter (each open
+  panel is another renderer) and repeated addresses (a second copy of a long chat). The saved
+  file itself is left alone.
+
 ### Cloudflare / sign-in recovery
 
 In testing, ChatGPT remained on a Cloudflare 403 verification page

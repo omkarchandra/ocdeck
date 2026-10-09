@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import urllib.request
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import websocket
 
@@ -57,7 +58,27 @@ def load_config(path):
         raise ValueError("The agent browser executable and absolute profile path are required")
     if "headless" in config and not isinstance(config["headless"], bool):
         raise ValueError("Set headless to true or false in agent-browser.json")
+    if "extensions" in config and not isinstance(config["extensions"], bool):
+        raise ValueError("Set extensions to true or false in agent-browser.json")
     return config
+
+
+def tidy_destinations(urls):
+    """Saved tab addresses without claude.ai's artifact panel and without repeats.
+
+    claude.ai adds ``artifact=<id>`` to a chat's address while an artifact panel is open;
+    reopening it starts another cross-site renderer in every agent tab. Identical addresses
+    would reopen as duplicate tabs, each a full copy of a long conversation.
+    """
+    tidy = []
+    for url in urls:
+        parts = urlsplit(url)
+        if parts.hostname == "claude.ai" and "artifact" in parts.query:
+            query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != "artifact"]
+            url = urlunsplit(parts._replace(query=urlencode(query)))
+        if url not in tidy:
+            tidy.append(url)
+    return tidy
 
 
 def monitors():
@@ -216,6 +237,10 @@ def chrome_command(config, bounds):
                "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
                # Bound memory: share processes across many tabs and keep disk caches small.
                "--renderer-process-limit=6", "--disk-cache-size=134217728", "--media-cache-size=67108864"]
+    if config.get("extensions") is False:
+        # The agent profile is a copy of the owner's: dozens of extensions would run a
+        # background page each and inject scripts into every chat. Agents use CDP only.
+        command.append("--disable-extensions")
     if config.get("headless"):
         command += ["--headless=new", "--disable-gpu"]
     else:
@@ -238,6 +263,7 @@ def chrome_command(config, bounds):
     urls = saved.get("urls", [])
     if not isinstance(urls, list) or not all(isinstance(url, str) and url.startswith(("http://", "https://")) for url in urls):
         raise ValueError("Invalid saved agent-browser tab destinations")
+    urls = tidy_destinations(urls)
     if urls:
         # systemd/browser crashes can leave Chrome's native session incomplete.
         # An explicit URL checkpoint survives those unreliable restore cases.

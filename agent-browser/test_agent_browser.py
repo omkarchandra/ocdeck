@@ -176,6 +176,55 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class LeanBrowserTests(unittest.TestCase):
+    """Fewer, lighter renderers: no extensions on request, and no artifact panels or duplicate tabs on restart."""
+
+    bounds = {"left": 32, "top": 48, "width": 1600, "height": 1050}
+    CHAT = "https://claude.ai/chat/3dac03f2-ebf9-49e6-8ccd-423c5b99aed3"
+
+    def config(self, profile="/dedicated/profile", **extra):
+        return {"browser": "/usr/bin/google-chrome-stable", "profile": profile, "port": 9223, **extra}
+
+    def test_extensions_stay_on_unless_the_config_turns_them_off(self):
+        self.assertNotIn("--disable-extensions", browser.chrome_command(self.config(), self.bounds))
+        self.assertNotIn("--disable-extensions", browser.chrome_command(self.config(extensions=True), self.bounds))
+        self.assertIn("--disable-extensions", browser.chrome_command(self.config(extensions=False), self.bounds))
+        self.assertIn("--disable-extensions", browser.chrome_command(self.config(extensions=False, headless=True), self.bounds))
+
+    def test_the_extensions_setting_must_be_a_boolean(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "agent-browser.json"
+            for value, ok in ((False, True), (True, True), ("no", False), (0, False)):
+                path.write_text(json.dumps({"enabled": True, "port": 9223, "profile": folder,
+                                            "browser": "/bin/sh", "extensions": value}))
+                if ok:
+                    self.assertEqual(browser.load_config(path)["extensions"], value)
+                else:
+                    with self.assertRaisesRegex(ValueError, "extensions"):
+                        browser.load_config(path)
+
+    def test_claude_artifact_panels_and_repeated_tabs_are_dropped_from_the_saved_addresses(self):
+        saved = [f"{self.CHAT}?agentA=1&artifact=e400d287", f"{self.CHAT}?agentB=1&artifact=e400d287",
+                 f"{self.CHAT}?agentB=1&artifact=e400d287", f"{self.CHAT}?agentB=1",
+                 f"{self.CHAT}?artifact=e400&agentC=1&x=", "https://example.org/page?artifact=keep",
+                 "https://notclaude.ai/chat?artifact=keep", "https://example.org/page?artifact=keep"]
+        self.assertEqual(browser.tidy_destinations(saved), [
+            f"{self.CHAT}?agentA=1", f"{self.CHAT}?agentB=1", f"{self.CHAT}?agentC=1&x=",
+            "https://example.org/page?artifact=keep", "https://notclaude.ai/chat?artifact=keep"])
+        self.assertEqual(browser.tidy_destinations([]), [])
+        plain = [f"{self.CHAT}?agentA=1#top", "https://claude.ai/new"]
+        self.assertEqual(browser.tidy_destinations(plain), plain)  # nothing to change: untouched
+
+    def test_the_launch_reopens_the_tidied_addresses_only(self):
+        with TemporaryDirectory() as profile:
+            Path(profile, "opencode-tabs.json").write_text(json.dumps({"version": 1, "urls": [
+                f"{self.CHAT}?agentB=1&artifact=e4", f"{self.CHAT}?agentB=1&artifact=e4", f"{self.CHAT}?agentC=1&artifact=e4"]}))
+            args = browser.chrome_command(self.config(profile), self.bounds)
+            reopened = args[args.index("--new-window") + 1:]
+            self.assertEqual(reopened, [f"{self.CHAT}?agentB=1", f"{self.CHAT}?agentC=1"])
+            self.assertIn("artifact=e4", Path(profile, "opencode-tabs.json").read_text())  # the file itself is not rewritten
+
+
 class TabJanitorTests(unittest.TestCase):
     """Each agent tab closes once it has sat unchanged for the idle period."""
 
