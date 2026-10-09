@@ -646,7 +646,7 @@ class EdgeHarnessAppTests(unittest.IsolatedAsyncioTestCase):
                     mocks.run_opencode.assert_not_called()
 
     # --- 7. x must never touch a foreign tmux name ---------------------------
-    async def test_x_only_stops_the_managed_terminal_and_never_the_foreign_one(self) -> None:
+    async def test_x_only_interrupts_the_managed_terminal_and_never_the_foreign_one(self) -> None:
         async with self.running(
             claude_status="idle", claude_instance=1, claude_terminals=("main", "cc-aaa")
         ) as (app, pilot):
@@ -657,6 +657,7 @@ class EdgeHarnessAppTests(unittest.IsolatedAsyncioTestCase):
                         side_effect=lambda name: name in {"main", "cc-aaa"},
                     ) as has_session, \
                     mock.patch.object(app, "_tmux_kill_session", return_value=True) as kill, \
+                    mock.patch.object(app, "_interrupt_claude_worker") as interrupt, \
                     mock.patch.object(app, "_stop_job_worker") as stop_worker:
                 await pilot.press("1")
                 await pilot.pause()
@@ -665,14 +666,13 @@ class EdgeHarnessAppTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("x")
                 await pilot.pause()
                 self.assertIn(
-                    "Press x again to stop tmux job cc-aaa",
+                    "Press x again to interrupt the agent in cc-aaa (Esc, as in Claude Code",
                     self.notify_texts(notify)[-1],
                 )
                 await pilot.press("x")
                 await pilot.pause()
-                stop_worker.assert_called_once_with(CLAUDE_ID, "cc-aaa")
-                for call in stop_worker.call_args_list:
-                    self.assertNotIn("main", str(call))
+                interrupt.assert_called_once_with("cc-aaa")
+                stop_worker.assert_not_called()  # a Claude terminal is interrupted, not killed
                 self.assertEqual(
                     [call for call in kill.call_args_list if "main" in str(call)],
                     [],
@@ -731,13 +731,13 @@ class EdgeHarnessAppTests(unittest.IsolatedAsyncioTestCase):
                     )
                     # Now pretend every tmux session exists, foreign "main" too.
                     mocks.has_session.side_effect = lambda name: True
-                    with mock.patch.object(app, "_stop_job_worker") as stop_worker:
+                    with mock.patch.object(app, "_interrupt_claude_worker") as interrupt:
                         await pilot.press("x")
                         await pilot.pause()
                         await pilot.press("x")
                         await pilot.pause()
-                        stop_worker.assert_called_once_with(CLAUDE_ID, "cc-aaa")
-                        for call in stop_worker.call_args_list:
+                        interrupt.assert_called_once_with("cc-aaa")
+                        for call in interrupt.call_args_list:
                             self.assertNotIn("main", str(call))
 
     # --- 8. y and rename are OpenCode-only on foreign harnesses --------------

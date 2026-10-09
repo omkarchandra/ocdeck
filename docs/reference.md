@@ -349,7 +349,7 @@ skipped with a warning.
 | `g` | Jump to the first pending permission |
 | Click a session's name | Rename it; `Enter` saves, `Esc` cancels |
 | `a` / **Auto** | New/resume with `--auto`; server-attached browser sessions reopen with their saved server permissions |
-| `x` | Close the selected tmux job or exact direct terminal (press twice to confirm); history is retained |
+| `x` | Press twice. On a running OpenCode V2 or Claude Code turn it interrupts the turn (Esc, as you would) and the session stays open; otherwise it closes the selected tmux job or exact direct terminal; history is retained |
 | `n` or **+ NEW SESSION** | Start a session in the selected project |
 | `Shift+N` or **+ BROWSER SESSION** | Start a blank browser-enabled session; choose the model with `/models` |
 | `Shift+B` or **ENABLE BROWSER** | Grant the selected eligible idle primary browser access, preserving its model |

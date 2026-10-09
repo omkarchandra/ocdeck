@@ -90,6 +90,7 @@ from .source import (
     session_renderer_pids,
 )
 from .tmux_header import apply_header, headers_for_sessions
+from .claude_interrupt import NOT_CLAUDE, interrupt_claude_turn
 from .v2_interrupt import IDLE, INTERRUPTED, NOT_OPENCODE, interrupt_v2_turn
 from .usage import UsageReport, collect_usage
 from .usage_view import UsageView, render_usage
@@ -4565,18 +4566,25 @@ class OCDeckApp(App[None]):
             self._stop_direct_job_worker(targets)
             return
         v2 = self._served_by_v2(session.id)
+        claude = session_harness(session) == "claude"
         if self.stop_confirm != session.id:
             self.stop_confirm = session.id
             self.notify(
                 f"Press x again to interrupt the agent in {sanitize_terminal_text(name)} "
                 "(Esc twice, as in OpenCode; the session stays open)"
                 if v2
+                else f"Press x again to interrupt the agent in {sanitize_terminal_text(name)} "
+                "(Esc, as in Claude Code; the session stays open)"
+                if claude
                 else f"Press x again to stop tmux job {sanitize_terminal_text(name)}",
                 timeout=6,
             )
             self.set_timer(6, self._clear_stop_confirm)
             return
         self.stop_confirm = ""
+        if claude:
+            self._interrupt_claude_worker(name)
+            return
         if v2:
             # A V2 turn runs in the OpenCode service: killing the terminal never
             # stopped it. Interrupt it the way the owner would, in its own pane.
@@ -4624,6 +4632,30 @@ class OCDeckApp(App[None]):
         self.notify(f"Stopped tmux job {sanitize_terminal_text(name)}", timeout=4)
         if self.selected_session_id == session_id:
             self._render_detail()
+        self._request_refresh(force=True)
+
+    @work(group="job-control", exit_on_error=False)
+    async def _interrupt_claude_worker(self, name: str) -> None:
+        shown = sanitize_terminal_text(name)
+        result = await asyncio.to_thread(interrupt_claude_turn, name)
+        if result == INTERRUPTED:
+            self.notify(f"Interrupted the agent in {shown}; the session stays open", timeout=5)
+        elif result == IDLE:
+            # Nothing to interrupt, so stopping means closing the terminal; the
+            # conversation is saved and o reopens it.
+            if await asyncio.to_thread(self._tmux_kill_session, name):
+                self.notify(f"Nothing was running; closed {shown} (o reopens it)", timeout=5)
+            else:
+                self.notify(f"Nothing is running in {shown}, and its terminal could not be closed",
+                            severity="warning", timeout=6)
+        elif result == NOT_CLAUDE:
+            self.notify(f"{shown} is not showing Claude Code; no keys were sent", severity="warning", timeout=6)
+        else:
+            self.notify(
+                f"Could not confirm the interrupt in {shown}; open it and press Esc",
+                severity="error",
+                timeout=8,
+            )
         self._request_refresh(force=True)
 
     @work(group="job-control", exit_on_error=False)
@@ -5529,7 +5561,7 @@ KEY_REFERENCE = """
 | **Shift+S** | Choose harness and agent/profile for the selected project; New or Continue with handoff notes |
 | **Shift+C** | Hand the selected session off to the Shift+H harness, with notes and git state |
 | **z in AGENTS** | Send every attached agent terminal to the background; tmux sessions keep running (press twice to confirm) |
-| **x** | Close the session's tmux job or direct terminal (press twice; history retained) |
+| **x** | Press twice. On a running OpenCode V2 or Claude Code turn it interrupts the turn the way you would (Esc) and the session stays open; otherwise it closes the tmux job or direct terminal (history retained) |
 | **Shift+A** | Archive the selected session off the board (press twice). OC Deck-only and reversible: nothing is stopped, a still-running session stays visible until it stops, and Shift+U lists archived rows again. In ALARMS it dismisses every listed alarm instead |
 | **Shift+U** | Show or hide archived sessions: listed dimmed with an [archived] marker; Shift+A twice on one unarchives it |
 | **n / + NEW SESSION** | Start a session in the selected project |
